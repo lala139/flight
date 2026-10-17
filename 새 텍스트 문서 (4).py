@@ -22,7 +22,7 @@ df = load_data()
 # 입력 폼
 with st.form("flight_form"):
     st.subheader("1. 한국 출국편")
-    dep_airline = st.selectbox("출국 항공사", ["제주항공", "エ어부산(에어부산)", "에어서울", "이스타항공", "기타"], key="dep_air")
+    dep_airline = st.selectbox("출국 항공사", ["제주항공", "에어부산", "에어서울", "이스타항공", "기타"], key="dep_air")
     
     col1, col2 = st.columns(2)
     with col1:
@@ -68,7 +68,8 @@ if not df.empty:
     st.dataframe(df_display, use_container_width=True)
     
     cheapest = df_sorted.iloc[0]
-    st.info(f"💡 **최저가 추천**: {cheapest['출국 항공사']} ({cheapest['출국 시간']}) / {cheapest['귀국 항공사']} ({cheapest['귀국 시간']}) 👉 **{int(cheapest['총합 가격(원)'):,}원**")
+    formatted_price = f"{int(cheapest['총합 가격(원)']):,}원"
+    st.info(f"💡 **최저가 추천**: {cheapest['출국 항공사']} ({cheapest['출국 시간']}) / {cheapest['귀국 항공사']} ({cheapest['귀국 시간']}) 👉 **{formatted_price}**")
     
     if st.button("🗑️ 모든 데이터 초기화"):
         if os.path.exists(DATA_FILE):
