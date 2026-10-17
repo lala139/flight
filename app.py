@@ -113,8 +113,8 @@ else:
     # 1. 상단 아코디언 버튼 영역 (접고 펼치기)
     # ------------------------------------------
     
-    # [1] 항공권 비교
-    with st.expander("✈️ 항공권 비교 (클릭해서 열기/닫기)"):
+    # [1] 항공권 비교 & 구매 완료 표시
+    with st.expander("✈️ 항공권 비교 (구매 확정 표시 기능 포함)"):
         with st.form("flight_form"):
             st.subheader("한국 출국편 & 현지 귀국편 입력")
             dep_airline = st.selectbox("출국 항공사", ["제주항공", "에어부산", "에어서울", "이스타항공", "기타"], key="dep_a")
@@ -128,44 +128,96 @@ else:
             with c4: ret_arr_t = st.time_input("귀국 도착 시간", value=pd.to_datetime("16:40").time())
             
             price = st.number_input("총합 가격 (원)", min_value=0, step=1000, value=300000)
+            is_booked = st.checkbox("✅ 이 항공권을 실제 구매 완료했나요?")
+
             if st.form_submit_button("➕ 항공권 추가"):
                 current_trip["flights"].append({
                     "출국 항공사": dep_airline,
                     "출국 시간": f"{dep_t.strftime('%H:%M')} -> {arr_t.strftime('%H:%M')}",
                     "귀국 항공사": ret_airline,
                     "귀국 시간": f"{ret_dep_t.strftime('%H:%M')} -> {ret_arr_t.strftime('%H:%M')}",
-                    "총합 가격(원)": price
+                    "총합 가격(원)": price,
+                    "구매여부": "구매완료" if is_booked else "후보"
                 })
                 save_data(travels)
                 st.success("추가되었습니다!")
                 st.rerun()
 
         if current_trip["flights"]:
-            df_f = pd.DataFrame(current_trip["flights"]).sort_values(by="총합 가격(원)", ascending=True).reset_index(drop=True)
-            df_f_disp = df_f.copy()
-            df_f_disp["총합 가격(원)"] = df_f_disp["총합 가격(원)"].apply(lambda x: f"{int(x):,}원")
-            st.dataframe(df_f_disp, use_container_width=True)
-            cheapest = df_f.iloc[0]
-            st.info(f"💡 **최저가 추천**: {cheapest['출국 항공사']} / {cheapest['귀국 항공사']} 👉 **{int(cheapest['총합 가격(원)']):,}원**")
+            st.subheader("📋 항공권 목록")
+            for idx, flight in enumerate(current_trip["flights"]):
+                price_formatted = f"{int(flight['총합 가격(원)']):,}원"
+                
+                # 구매 완료 항목은 초록색 카드 강조
+                if flight.get("구매여부") == "구매완료":
+                    st.success(
+                        f"✅ **[구매 확정 항공권]** {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | **{price_formatted}**"
+                    )
+                else:
+                    st.info(
+                        f"🔹 **[후보]** {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | **{price_formatted}**"
+                    )
+                
+                # 구매 여부 상태 변경 체크박스
+                col_status, col_blank = st.columns([1, 4])
+                with col_status:
+                    is_now_booked = st.checkbox("구매 완료 상태 지정", value=(flight.get("구매여부") == "구매완료"), key=f"f_booked_{idx}")
+                    new_status = "구매완료" if is_now_booked else "후보"
+                    if new_status != flight.get("구매여부"):
+                        current_trip["flights"][idx]["구매여부"] = new_status
+                        save_data(travels)
+                        st.rerun()
+
             if st.button("🗑️ 항공권 전체 초기화"):
                 current_trip["flights"] = []
                 save_data(travels)
                 st.rerun()
 
-    # [2] 숙소 후보
-    with st.expander("🏨 숙소 후보 (클릭해서 열기/닫기)"):
+    # [2] 숙소 후보 & 예약 완료 표시
+    with st.expander("🏨 숙소 후보 (예약 확정 표시 기능 포함)"):
         with st.form("hotel_form"):
             h_name = st.text_input("숙소 이름")
             h_loc = st.text_input("위치 / 지역")
             h_price = st.number_input("1박 가격 (원)", min_value=0, step=5000, value=100000)
             h_note = st.text_area("특징 및 메모")
+            h_booked = st.checkbox("✅ 이 숙소를 실제로 예약 완료했나요?")
+            
             if st.form_submit_button("➕ 숙소 추가"):
-                current_trip["hotels"].append({"숙소명": h_name, "위치": h_loc, "1박 가격(원)": h_price, "메모": h_note})
+                current_trip["hotels"].append({
+                    "숙소명": h_name,
+                    "위치": h_loc,
+                    "1박 가격(원)": h_price,
+                    "메모": h_note,
+                    "예약여부": "예약완료" if h_booked else "후보"
+                })
                 save_data(travels)
                 st.success("추가되었습니다!")
                 st.rerun()
+                
         if current_trip["hotels"]:
-            st.dataframe(pd.DataFrame(current_trip["hotels"]), use_container_width=True)
+            st.subheader("📋 숙소 목록")
+            for idx, hotel in enumerate(current_trip["hotels"]):
+                h_price_fmt = f"{int(hotel['1박 가격(원)']):,}원"
+                
+                # 예약 완료 항목은 초록색 카드 강조
+                if hotel.get("예약여부") == "예약완료":
+                    st.success(
+                        f"✅ **[예약 확정 숙소]** {hotel['숙소명']} ({hotel['위치']}) | 1박: {h_price_fmt}\n\n📝 메모: {hotel['메모']}"
+                    )
+                else:
+                    st.info(
+                        f"🔹 **[후보]** {hotel['숙소명']} ({hotel['위치']}) | 1박: {h_price_fmt}\n\n📝 메모: {hotel['메모']}"
+                    )
+                    
+                col_h_status, _ = st.columns([1, 4])
+                with col_h_status:
+                    is_h_booked = st.checkbox("예약 완료 상태 지정", value=(hotel.get("예약여부") == "예약완료"), key=f"h_booked_{idx}")
+                    new_h_status = "예약완료" if is_h_booked else "후보"
+                    if new_h_status != hotel.get("예약여부"):
+                        current_trip["hotels"][idx]["예약여부"] = new_h_status
+                        save_data(travels)
+                        st.rerun()
+
             if st.button("🗑️ 숙소 전체 초기화"):
                 current_trip["hotels"] = []
                 save_data(travels)
@@ -224,68 +276,4 @@ else:
             if st.form_submit_button("➕ 영상 추가"):
                 current_trip["videos"].append({"설명": v_title, "URL": v_url})
                 save_data(travels)
-                st.success("추가되었습니다!")
-                st.rerun()
-        if current_trip["videos"]:
-            for v in current_trip["videos"]:
-                st.subheader(f"🎬 {v['설명']}")
-                try: st.video(v["URL"])
-                except: st.warning("영상을 불러올 수 없습니다.")
-            if st.button("🗑️ 영상 전체 초기화"):
-                current_trip["videos"] = []
-                save_data(travels)
-                st.rerun()
-
-    # [6] 📸 추억 사진첩 (이미지 업로드)
-    with st.expander("📸 추억 사진첩 (클릭해서 열기/닫기)"):
-        uploaded_files = st.file_uploader("사진 올리기 (PNG, JPG)", accept_multiple_files=True, type=['png', 'jpg', 'jpeg'])
-        if uploaded_files:
-            cols = st.columns(3)
-            for idx, file in enumerate(uploaded_files):
-                with cols[idx % 3]:
-                    st.image(file, use_column_width=True)
-
-    st.markdown("---")
-
-    # ------------------------------------------
-    # 2. 하단 상시 고정 영역 (일자별 일정 & 준비물)
-    # ------------------------------------------
-    col_left, col_right = st.columns(2)
-
-    with col_left:
-        st.subheader("📅 일자별 일정")
-        with st.form("schedule_form"):
-            sch_day = st.text_input("일자 (예: 1일차, 7월 10일)")
-            sch_content = st.text_area("상세 일정 내용")
-            if st.form_submit_button("➕ 일정 추가"):
-                current_trip["schedule"].append({"일자": sch_day, "내용": sch_content})
-                save_data(travels)
-                st.success("일정이 추가되었습니다!")
-                st.rerun()
-        if current_trip["schedule"]:
-            for sch in current_trip["schedule"]:
-                st.markdown(f"**📌 [{sch['일자']}]**\n{sch['내용']}")
-                st.write("---")
-            if st.button("🗑️ 일정 전체 초기화"):
-                current_trip["schedule"] = []
-                save_data(travels)
-                st.rerun()
-
-    with col_right:
-        st.subheader("🎒 준비물 체크리스트")
-        with st.form("chk_form"):
-            chk_item = st.text_input("준비물 이름 (예: 여권, 보조배터리)")
-            if st.form_submit_button("➕ 준비물 추가"):
-                current_trip["checklist"].append({"아이템": chk_item, "체크": False})
-                save_data(travels)
-                st.rerun()
-        if current_trip["checklist"]:
-            for i, item in enumerate(current_trip["checklist"]):
-                checked = st.checkbox(item["아이템"], value=item["체크"], key=f"chk_{selected_travel}_{i}")
-                if checked != item["체크"]:
-                    current_trip["checklist"][i]["체크"] = checked
-                    save_data(travels)
-            if st.button("🗑️ 준비물 전체 초기화"):
-                current_trip["checklist"] = []
-                save_data(travels)
-                st.rerun()
+                st.success
