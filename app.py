@@ -146,7 +146,7 @@ else:
     for key in ["flights", "hotels", "spots", "videos", "expenses", "photos", "schedule", "checklist"]:
         current_trip.setdefault(key, [])
 
-    # 긴급 연락처 데이터 자동 할당 (구버전 데이터 대응)
+    # 긴급 연락처 데이터 자동 할당
     if "embassy" not in current_trip or not current_trip["embassy"]:
         city_query = current_trip['info'].get('city', 'Seoul')
         current_trip["embassy"] = get_auto_emergency_contacts(city_query)
@@ -156,305 +156,401 @@ else:
     st.caption(f"📅 여행 일정: {current_trip['info']['period']}")
     
     # ------------------------------------------
-    # 상단 메인 지도 표시용 검색 쿼리 수집
+    # 지도 검색 쿼리 수집
     # ------------------------------------------
     map_queries = []
     
     # 1. 숙소 지도 수집
     booked_hotels = [h for h in current_trip["hotels"] if h.get("상태") == "예약완료"]
-    if booked_hotels:
-        for bh in booked_hotels:
-            q = bh.get("위치") or bh.get("숙소명")
-            if q: map_queries.append(f"🏢 {bh['숙소명']} ({q})")
-    else:
-        for h in current_trip["hotels"]:
-            q = h.get("위치") or h.get("숙소명")
-            if q: map_queries.append(f"🏢 {h['숙소명']} ({q})")
+    target_hotels = booked_hotels if booked_hotels else current_trip["hotels"]
+    for h in target_hotels:
+        q = h.get("위치") or h.get("숙소명")
+        if q: map_queries.append(f"🏢 {h['숙소명']} ({q})")
 
     # 2. 장소/맛집 중 '지도에 표시' 체크된 항목 수집
     category_emojis = {"놀거리/관광지": "🎡", "맛집/카페": "🍴", "쇼핑": "🛍️", "기타": "📌"}
     for spot in current_trip["spots"]:
         if spot.get("show_on_map", False):
             cat_emoji = category_emojis.get(spot.get("분류"), "📌")
-            q = spot.get("장소명")
-            if q: map_queries.append(f"{cat_emoji} {q}")
+            spot_q = spot.get("주소") if spot.get("주소") else spot.get("장소명")
+            if spot_q: map_queries.append(f"{cat_emoji} {spot['장소명']} ({spot_q})")
 
-    # --- 대시보드: 좌측(날씨, 환율, 자동연동 긴급 연락처), 우측(정사각형 구글 지도) ---
-    col_dash_left, col_dash_right = st.columns([1, 1])
-    
-    with col_dash_left:
-        city_query = current_trip['info'].get('city', 'Seoul')
-        weather_info = get_weather(city_query)
-        st.metric(label=f"🌤️ {city_query} 실시간 날씨", value=weather_info)
-        
-        st.markdown("---")
-        rates = get_exchange_rates()
-        st.write("🔱 **실시간 주요 환율**")
-        for k, v in rates.items():
-            st.caption(f"• **{k}**: {v}원")
-            
-        st.markdown("---")
-        st.write("🚨 **현지 긴급 연락처 (자동 연동)**")
-        
-        # 자동 연결된 연락처 불러오기
-        embassy_info = current_trip.get("embassy", "")
-        st.info(embassy_info)
-        
-        # 수정 기능 (팝오버 방식)
-        with st.popover("✏️ 연락처 정보 수정"):
-            with st.form("embassy_form"):
-                new_embassy = st.text_area("긴급 연락처 메모", value=embassy_info)
-                if st.form_submit_button("💾 저장"):
-                    current_trip["embassy"] = new_embassy
-                    save_data(travels)
-                    st.success("긴급 연락처가 저장되었습니다!")
-                    st.rerun()
-    
-    with col_dash_right:
-        st.subheader("🗺️ 전체 관심 장소 지도")
-        if map_queries:
-            combined_query = " OR ".join(map_queries)
-            encoded_query = urllib.parse.quote(combined_query)
-            map_url = f"https://maps.google.com/maps?q={encoded_query}&t=&z=13&ie=UTF8&iwloc=&output=embed"
-            components.iframe(map_url, width=400, height=400)
-            st.caption(f"📍 지도 표시 항목: {', '.join(map_queries)}")
-        else:
-            default_query = urllib.parse.quote(city_query)
-            map_url = f"https://maps.google.com/maps?q={default_query}&t=&z=12&ie=UTF8&iwloc=&output=embed"
-            components.iframe(map_url, width=400, height=400)
-            st.caption("💡 지도에 띄울 숙소나 관광지/맛집 항목을 목록에서 체크해 보세요!")
-
-    st.markdown("---")
+    # ==========================================
+    # 탭 구조
+    # ==========================================
+    tab_dash, tab_flight_hotel, tab_spot_sched, tab_expense, tab_etc = st.tabs([
+        "🎛️ 대시보드 및 지도", 
+        "✈️ 항공권 & 숙소", 
+        "📍 장소 및 일정", 
+        "💰 비용 정산", 
+        "🎒 준비물 & 추억"
+    ])
 
     # ------------------------------------------
-    # 1. 상단 아코디언 버튼 영역 (접고 펼치기)
+    # [탭 1] 대시보드 및 지도
     # ------------------------------------------
-    
-    # [1] 항공권 비교
-    with st.expander("✈️ 항공권 비교"):
-        with st.form("flight_form"):
-            st.subheader("한국 출국편 & 현지 귀국편 입력")
-            dep_airline = st.selectbox("출국 항공사", ["제주항공", "에어부산", "에어서울", "이스타항공", "기타"], key="dep_a")
-            c1, c2 = st.columns(2)
-            with c1: dep_t = st.time_input("출발 시간", value=pd.to_datetime("07:55").time())
-            with c2: arr_t = st.time_input("도착 시간", value=pd.to_datetime("10:30").time())
+    with tab_dash:
+        col_dash_left, col_dash_right = st.columns([1, 1])
+        
+        with col_dash_left:
+            city_query = current_trip['info'].get('city', 'Seoul')
+            weather_info = get_weather(city_query)
+            st.metric(label=f"🌤️ {city_query} 실시간 날씨", value=weather_info)
             
-            ret_airline = st.selectbox("귀국 항공사", ["제주항공", "에어부산", "에어서울", "이스타항공", "기타"], key="ret_a")
-            c3, c4 = st.columns(2)
-            with c3: ret_dep_t = st.time_input("귀국 출발 시간", value=pd.to_datetime("14:15").time())
-            with c4: ret_arr_t = st.time_input("귀국 도착 시간", value=pd.to_datetime("16:40").time())
-            
-            price = st.number_input("총합 가격 (원)", min_value=0, step=1000, value=300000)
-            is_discount = st.checkbox("🏷️ 특가 / 할인가 적용 항공권인가요?")
-
-            if st.form_submit_button("➕ 항공권 추가"):
-                current_trip["flights"].append({
-                    "출국 항공사": dep_airline,
-                    "출국 시간": f"{dep_t.strftime('%H:%M')} -> {arr_t.strftime('%H:%M')}",
-                    "귀국 항공사": ret_airline,
-                    "귀국 시간": f"{ret_dep_t.strftime('%H:%M')} -> {ret_arr_t.strftime('%H:%M')}",
-                    "총합 가격(원)": price,
-                    "할인여부": "할인가" if is_discount else "정가",
-                    "상태": "후보"
-                })
-                save_data(travels)
-                st.success("항공권이 추가되었습니다!")
-                st.rerun()
-
-        if current_trip["flights"]:
-            st.subheader("📋 등록된 항공권 비교 목록")
-            
-            df_temp = pd.DataFrame(current_trip["flights"])
-            df_sorted = df_temp.sort_values(by="총합 가격(원)", ascending=True).reset_index(drop=True)
-            cheapest_item = df_sorted.iloc[0] if not df_sorted.empty else None
-
-            for idx, flight in enumerate(current_trip["flights"]):
-                price_fmt = f"{int(flight['총합 가격(원)']):,}원"
-                is_cheapest = (cheapest_item is not None and 
-                               flight['출국 항공사'] == cheapest_item['출국 항공사'] and 
-                               flight['총합 가격(원)'] == cheapest_item['총합 가격(원)'])
+            st.markdown("---")
+            rates = get_exchange_rates()
+            st.write("🔱 **실시간 주요 환율**")
+            for k, v in rates.items():
+                st.caption(f"• **{k}**: {v}원")
                 
-                discount_tag = "🔥 [할인가]" if flight.get("할인여부") == "할인가" else "🏷️ [정가]"
-
-                col_info, col_chk = st.columns([5, 1])
-                with col_info:
-                    if flight.get("상태") == "구매완료":
-                        st.success(f"✅ **[구매 완료]** {discount_tag} {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | **{price_fmt}**")
-                    elif is_cheapest:
-                        st.info(f"💡 **[최저가 추천]** {discount_tag} {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | **{price_fmt}**")
-                    else:
-                        st.text(f"▫️ [후보] {discount_tag} {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | {price_fmt}")
-                
-                with col_chk:
-                    is_now_booked = st.checkbox("구매완료", value=(flight.get("상태") == "구매완료"), key=f"f_status_{selected_travel}_{idx}")
-                    new_status = "구매완료" if is_now_booked else "후보"
-                    if new_status != flight.get("상태"):
-                        current_trip["flights"][idx]["상태"] = new_status
+            st.markdown("---")
+            st.write("🚨 **현지 긴급 연락처 (자동 연동)**")
+            embassy_info = current_trip.get("embassy", "")
+            st.info(embassy_info)
+            
+            with st.popover("✏️ 연락처 정보 수정"):
+                with st.form("embassy_form"):
+                    new_embassy = st.text_area("긴급 연락처 메모", value=embassy_info)
+                    if st.form_submit_button("💾 저장"):
+                        current_trip["embassy"] = new_embassy
                         save_data(travels)
+                        st.success("긴급 연락처가 저장되었습니다!")
                         st.rerun()
+        
+        with col_dash_right:
+            st.subheader("🗺️ 전체 관심 장소 지도")
+            if map_queries:
+                combined_query = " OR ".join(map_queries)
+                encoded_query = urllib.parse.quote(combined_query)
+                map_url = f"https://maps.google.com/maps?q={encoded_query}&t=&z=13&ie=UTF8&iwloc=&output=embed"
+                components.iframe(map_url, width=450, height=420)
+                st.caption(f"📍 지도 표시 항목: {', '.join(map_queries)}")
+            else:
+                default_query = urllib.parse.quote(city_query)
+                map_url = f"https://maps.google.com/maps?q={default_query}&t=&z=12&ie=UTF8&iwloc=&output=embed"
+                components.iframe(map_url, width=450, height=420)
+                st.caption("💡 장소 목록에서 '지도에 표시'를 체크해 보세요!")
 
-            if st.button("🗑️ 항공권 전체 초기화"):
-                current_trip["flights"] = []
-                save_data(travels)
-                st.rerun()
-
-    # [2] 🏢 숙소 후보
-    with st.expander("🏢 숙소 후보"):
-        with st.form("hotel_form"):
-            h_name = st.text_input("숙소 이름")
-            h_loc = st.text_input("위치 / 주소 (지도 표시용)")
-            h_price = st.number_input("1박 가격 (원)", min_value=0, step=5000, value=100000)
-            is_h_discount = st.checkbox("🏷️ 특가 / 할인가 적용 숙소인가요?")
-            h_link = st.text_input("숙소 링크 (URL)", placeholder="https://www.agoda.com 또는 https://www.airbnb.co.kr...")
-            h_note = st.text_area("특징 및 메모")
-            
-            if st.form_submit_button("➕ 숙소 추가"):
-                current_trip["hotels"].append({
-                    "숙소명": h_name,
-                    "위치": h_loc,
-                    "1박 가격(원)": h_price,
-                    "할인여부": "할인가" if is_h_discount else "정가",
-                    "링크": h_link,
-                    "메모": h_note,
-                    "상태": "후보"
-                })
-                save_data(travels)
-                st.success("숙소가 추가되었습니다!")
-                st.rerun()
+    # ------------------------------------------
+    # [탭 2] 항공권 & 숙소
+    # ------------------------------------------
+    with tab_flight_hotel:
+        sub_tab_f, sub_tab_h = st.tabs(["✈️ 항공권 비교", "🏢 숙소 후보"])
+        
+        with sub_tab_f:
+            with st.form("flight_form"):
+                st.subheader("한국 출국편 & 현지 귀국편 입력")
+                dep_airline = st.selectbox("출국 항공사", ["제주항공", "에어부산", "에어서울", "이스타항공", "기타"], key="dep_a")
+                c1, c2 = st.columns(2)
+                with c1: dep_t = st.time_input("출발 시간", value=pd.to_datetime("07:55").time())
+                with c2: arr_t = st.time_input("도착 시간", value=pd.to_datetime("10:30").time())
                 
-        if current_trip["hotels"]:
-            st.subheader("📋 등록된 숙소 목록")
-            
-            df_h_temp = pd.DataFrame(current_trip["hotels"])
-            df_h_sorted = df_h_temp.sort_values(by="1박 가격(원)", ascending=True).reset_index(drop=True)
-            cheapest_hotel = df_h_sorted.iloc[0] if not df_h_sorted.empty else None
-
-            delete_idx = None
-
-            for idx, hotel in enumerate(current_trip["hotels"]):
-                h_price_fmt = f"{int(hotel['1박 가격(원)']):,}원"
-                is_cheapest_h = (cheapest_hotel is not None and 
-                                 hotel['숙소명'] == cheapest_hotel['숙소명'] and 
-                                 hotel['1박 가격(원)'] == cheapest_hotel['1박 가격(원)'])
-                url = hotel.get("링크", "").strip()
-                h_discount_tag = "🔥 [할인가]" if hotel.get("할인여부") == "할인가" else "🏷️ [정가]"
-
-                c_text, c_actions = st.columns([4, 2])
+                ret_airline = st.selectbox("귀국 항공사", ["제주항공", "에어부산", "에어서울", "이스타항공", "기타"], key="ret_a")
+                c3, c4 = st.columns(2)
+                with c3: ret_dep_t = st.time_input("귀국 출발 시간", value=pd.to_datetime("14:15").time())
+                with c4: ret_arr_t = st.time_input("귀국 도착 시간", value=pd.to_datetime("16:40").time())
                 
-                with c_text:
-                    if hotel.get("상태") == "예약완료":
-                        st.success(f"✅ **[예약 완료]** 🏢 **{hotel['숙소명']}** ({hotel['위치']}) | {h_discount_tag} 1박: {h_price_fmt}\n\n📝 메모: {hotel['메모']}")
-                    elif is_cheapest_h:
-                        st.info(f"💡 **[추천 가성비]** 🏢 **{hotel['숙소명']}** ({hotel['위치']}) | {h_discount_tag} 1박: {h_price_fmt}\n\n📝 메모: {hotel['메모']}")
-                    else:
-                        st.write(f"🏢 **{hotel['숙소명']}** ({hotel['위치']}) | {h_discount_tag} 1박: {h_price_fmt} | 📝 {hotel['메모']}")
-                
-                with c_actions:
-                    sub_col1, sub_col2, sub_col3 = st.columns([1.2, 1, 0.8])
+                price = st.number_input("총합 가격 (원)", min_value=0, step=1000, value=300000)
+                is_discount = st.checkbox("🏷️ 특가 / 할인가 적용 항공권인가요?")
+
+                if st.form_submit_button("➕ 항공권 추가"):
+                    current_trip["flights"].append({
+                        "출국 항공사": dep_airline,
+                        "출국 시간": f"{dep_t.strftime('%H:%M')} -> {arr_t.strftime('%H:%M')}",
+                        "귀국 항공사": ret_airline,
+                        "귀국 시간": f"{ret_dep_t.strftime('%H:%M')} -> {ret_arr_t.strftime('%H:%M')}",
+                        "총합 가격(원)": price,
+                        "할인여부": "할인가" if is_discount else "정가",
+                        "상태": "후보"
+                    })
+                    save_data(travels)
+                    st.success("항공권이 추가되었습니다!")
+                    st.rerun()
+
+            if current_trip["flights"]:
+                st.subheader("📋 등록된 항공권 비교 목록")
+                df_temp = pd.DataFrame(current_trip["flights"])
+                df_sorted = df_temp.sort_values(by="총합 가격(원)", ascending=True).reset_index(drop=True)
+                cheapest_item = df_sorted.iloc[0] if not df_sorted.empty else None
+
+                for idx, flight in enumerate(current_trip["flights"]):
+                    price_fmt = f"{int(flight['총합 가격(원)']):,}원"
+                    is_cheapest = (cheapest_item is not None and 
+                                   flight['출국 항공사'] == cheapest_item['출국 항공사'] and 
+                                   flight['총합 가격(원)'] == cheapest_item['총합 가격(원)'])
                     
-                    with sub_col1:
-                        is_h_booked = st.checkbox("예약완료", value=(hotel.get("상태") == "예약완료"), key=f"h_status_{selected_travel}_{idx}")
-                        new_h_status = "예약완료" if is_h_booked else "후보"
-                        if new_h_status != hotel.get("상태"):
-                            current_trip["hotels"][idx]["상태"] = new_h_status
+                    discount_tag = "🔥 [할인가]" if flight.get("할인여부") == "할인가" else "🏷️ [정가]"
+
+                    col_info, col_chk = st.columns([5, 1])
+                    with col_info:
+                        if flight.get("상태") == "구매완료":
+                            st.success(f"✅ **[구매 완료]** {discount_tag} {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | **{price_fmt}**")
+                        elif is_cheapest:
+                            st.info(f"💡 **[최저가 추천]** {discount_tag} {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | **{price_fmt}**")
+                        else:
+                            st.text(f"▫️ [후보] {discount_tag} {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | {price_fmt}")
+                    
+                    with col_chk:
+                        is_now_booked = st.checkbox("구매완료", value=(flight.get("상태") == "구매완료"), key=f"f_status_{selected_travel}_{idx}")
+                        new_status = "구매완료" if is_now_booked else "후보"
+                        if new_status != flight.get("상태"):
+                            current_trip["flights"][idx]["상태"] = new_status
                             save_data(travels)
                             st.rerun()
 
-                    with sub_col2:
-                        if url:
-                            if not (url.startswith("http://") or url.startswith("https://")):
-                                url = "https://" + url
-                            st.link_button("🔗 이동", url)
-                        else:
-                            st.caption("링크없음")
+                if st.button("🗑️ 항공권 전체 초기화"):
+                    current_trip["flights"] = []
+                    save_data(travels)
+                    st.rerun()
 
-                    with sub_col3:
-                        if st.button("🗑️", key=f"h_del_btn_{selected_travel}_{idx}"):
-                            delete_idx = idx
+        with sub_tab_h:
+            with st.form("hotel_form"):
+                h_name = st.text_input("숙소 이름")
+                h_loc = st.text_input("위치 / 주소 (지도 표시용)")
+                h_price = st.number_input("1박 가격 (원)", min_value=0, step=5000, value=100000)
+                is_h_discount = st.checkbox("🏷️ 특가 / 할인가 적용 숙소인가요?")
+                h_link = st.text_input("숙소 링크 (URL)", placeholder="https://www.agoda.com 또는 https://www.airbnb.co.kr...")
+                h_note = st.text_area("특징 및 메모")
+                
+                if st.form_submit_button("➕ 숙소 추가"):
+                    current_trip["hotels"].append({
+                        "숙소명": h_name,
+                        "위치": h_loc,
+                        "1박 가격(원)": h_price,
+                        "할인여부": "할인가" if is_h_discount else "정가",
+                        "링크": h_link,
+                        "메모": h_note,
+                        "상태": "후보"
+                    })
+                    save_data(travels)
+                    st.success("숙소가 추가되었습니다!")
+                    st.rerun()
+                    
+            if current_trip["hotels"]:
+                st.subheader("📋 등록된 숙소 목록")
+                df_h_temp = pd.DataFrame(current_trip["hotels"])
+                df_h_sorted = df_h_temp.sort_values(by="1박 가격(원)", ascending=True).reset_index(drop=True)
+                cheapest_hotel = df_h_sorted.iloc[0] if not df_h_sorted.empty else None
+
+                delete_idx = None
+                for idx, hotel in enumerate(current_trip["hotels"]):
+                    h_price_fmt = f"{int(hotel['1박 가격(원)']):,}원"
+                    is_cheapest_h = (cheapest_hotel is not None and 
+                                     hotel['숙소명'] == cheapest_hotel['숙소명'] and 
+                                     hotel['1박 가격(원)'] == cheapest_hotel['1박 가격(원)'])
+                    url = hotel.get("링크", "").strip()
+                    h_discount_tag = "🔥 [할인가]" if hotel.get("할인여부") == "할인가" else "🏷️ [정가]"
+
+                    c_text, c_actions = st.columns([4, 2])
+                    with c_text:
+                        if hotel.get("상태") == "예약완료":
+                            st.success(f"✅ **[예약 완료]** 🏢 **{hotel['숙소명']}** ({hotel['위치']}) | {h_discount_tag} 1박: {h_price_fmt}\n\n📝 메모: {hotel['메모']}")
+                        elif is_cheapest_h:
+                            st.info(f"💡 **[추천 가성비]** 🏢 **{hotel['숙소명']}** ({hotel['위치']}) | {h_discount_tag} 1박: {h_price_fmt}\n\n📝 메모: {hotel['메모']}")
+                        else:
+                            st.write(f"🏢 **{hotel['숙소명']}** ({hotel['위치']}) | {h_discount_tag} 1박: {h_price_fmt} | 📝 {hotel['메모']}")
+                    
+                    with c_actions:
+                        sub_col1, sub_col2, sub_col3 = st.columns([1.2, 1, 0.8])
+                        with sub_col1:
+                            is_h_booked = st.checkbox("예약완료", value=(hotel.get("상태") == "예약완료"), key=f"h_status_{selected_travel}_{idx}")
+                            new_h_status = "예약완료" if is_h_booked else "후보"
+                            if new_h_status != hotel.get("상태"):
+                                current_trip["hotels"][idx]["상태"] = new_h_status
+                                save_data(travels)
+                                st.rerun()
+                        with sub_col2:
+                            if url:
+                                if not (url.startswith("http://") or url.startswith("https://")):
+                                    url = "https://" + url
+                                st.link_button("🔗 이동", url)
+                            else:
+                                st.caption("링크없음")
+                        with sub_col3:
+                            if st.button("🗑️", key=f"h_del_btn_{selected_travel}_{idx}"):
+                                delete_idx = idx
 
                     edit_toggle = st.checkbox("✏️ 정보 수정", key=f"h_edit_toggle_{selected_travel}_{idx}")
+                    if edit_toggle:
+                        with st.form(key=f"h_edit_form_{selected_travel}_{idx}"):
+                            st.markdown(f"⚙️ **'🏢 {hotel['숙소명']}' 내용 수정**")
+                            e_name = st.text_input("숙소 이름", value=hotel.get("숙소명", ""))
+                            e_loc = st.text_input("위치 / 주소", value=hotel.get("위치", ""))
+                            e_price = st.number_input("1박 가격 (원)", min_value=0, step=5000, value=int(hotel.get("1박 가격(원)", 100000)))
+                            e_is_discount = st.checkbox("🏷️ 특가 / 할인가 적용", value=(hotel.get("할인여부") == "할인가"))
+                            e_link = st.text_input("숙소 링크 (URL)", value=hotel.get("링크", ""))
+                            e_note = st.text_area("특징 및 메모", value=hotel.get("메모", ""))
+                            
+                            if st.form_submit_button("💾 수정사항 저장"):
+                                current_trip["hotels"][idx] = {
+                                    "숙소명": e_name, "위치": e_loc, "1박 가격(원)": e_price,
+                                    "할인여부": "할인가" if e_is_discount else "정가",
+                                    "링크": e_link, "메모": e_note, "상태": hotel.get("상태", "후보")
+                                }
+                                save_data(travels)
+                                st.success("수정되었습니다!")
+                                st.rerun()
+                    st.write("---")
 
-                if edit_toggle:
-                    with st.form(key=f"h_edit_form_{selected_travel}_{idx}"):
-                        st.markdown(f"⚙️ **'🏢 {hotel['숙소명']}' 내용 수정**")
-                        e_name = st.text_input("숙소 이름", value=hotel.get("숙소명", ""))
-                        e_loc = st.text_input("위치 / 주소", value=hotel.get("위치", ""))
-                        e_price = st.number_input("1박 가격 (원)", min_value=0, step=5000, value=int(hotel.get("1박 가격(원)", 100000)))
-                        e_is_discount = st.checkbox("🏷️ 특가 / 할인가 적용", value=(hotel.get("할인여부") == "할인가"))
-                        e_link = st.text_input("숙소 링크 (URL)", value=hotel.get("링크", ""))
-                        e_note = st.text_area("특징 및 메모", value=hotel.get("메모", ""))
-                        
-                        if st.form_submit_button("💾 수정사항 저장"):
-                            current_trip["hotels"][idx] = {
-                                "숙소명": e_name,
-                                "위치": e_loc,
-                                "1박 가격(원)": e_price,
-                                "할인여부": "할인가" if e_is_discount else "정가",
-                                "링크": e_link,
-                                "메모": e_note,
-                                "상태": hotel.get("상태", "후보")
-                            }
+                if delete_idx is not None:
+                    del current_trip["hotels"][delete_idx]
+                    save_data(travels)
+                    st.rerun()
+
+                if st.button("🗑️ 숙소 전체 초기화"):
+                    current_trip["hotels"] = []
+                    save_data(travels)
+                    st.rerun()
+
+    # ------------------------------------------
+    # [탭 3] 장소 및 일정 (개별 수정 / 삭제 기능 적용)
+    # ------------------------------------------
+    with tab_spot_sched:
+        col_spot_left, col_spot_right = st.columns([1.1, 0.9])
+        
+        with col_spot_left:
+            st.subheader("📍 관광지 및 맛집 등록")
+            with st.form("spot_form"):
+                s_name = st.text_input("장소 이름 (예: 센소지, 도쿄 타워)")
+                s_addr = st.text_input("상세 주소 (예: 도쿄도 다이토구 아사쿠사 2-3-1) - 지도 검색용")
+                s_cat = st.selectbox("분류", ["놀거리/관광지", "맛집/카페", "쇼핑", "기타"])
+                s_note = st.text_area("추천 이유 및 메모")
+                
+                if st.form_submit_button("➕ 장소 추가"):
+                    current_trip["spots"].append({
+                        "장소명": s_name, 
+                        "주소": s_addr,
+                        "분류": s_cat, 
+                        "메모": s_note,
+                        "show_on_map": False
+                    })
+                    save_data(travels)
+                    st.success("장소가 추가되었습니다!")
+                    st.rerun()
+                    
+            if current_trip["spots"]:
+                st.subheader("📋 등록된 장소 목록")
+                spot_delete_idx = None
+                
+                for idx, spot in enumerate(current_trip["spots"]):
+                    cat_name = spot.get("분류", "기타")
+                    emoji = category_emojis.get(cat_name, "📌")
+                    addr_str = f"\n📍 주소: {spot['주소']}" if spot.get('주소') else ""
+                    
+                    col_s_info, col_s_actions = st.columns([3.5, 1.5])
+                    with col_s_info:
+                        st.write(f"{emoji} **[{cat_name}] {spot['장소명']}**{addr_str}\n\n📝 {spot['메모']}")
+                    
+                    with col_s_actions:
+                        show_map = st.checkbox("🗺️ 지도 표시", value=spot.get("show_on_map", False), key=f"spot_map_chk_{selected_travel}_{idx}")
+                        if show_map != spot.get("show_on_map", False):
+                            current_trip["spots"][idx]["show_on_map"] = show_map
                             save_data(travels)
-                            st.success("수정되었습니다!")
                             st.rerun()
+                            
+                        if st.button("🗑️ 삭제", key=f"spot_del_btn_{selected_travel}_{idx}"):
+                            spot_delete_idx = idx
 
-                st.write("---")
+                    # 관광지 개별 수정 기능
+                    edit_spot_toggle = st.checkbox("✏️ 정보 수정", key=f"spot_edit_toggle_{selected_travel}_{idx}")
+                    if edit_spot_toggle:
+                        with st.form(key=f"spot_edit_form_{selected_travel}_{idx}"):
+                            st.markdown(f"⚙️ **'{spot['장소명']}' 내용 수정**")
+                            e_s_name = st.text_input("장소 이름", value=spot.get("장소명", ""))
+                            e_s_addr = st.text_input("상세 주소", value=spot.get("주소", ""))
+                            
+                            cat_list = ["놀거리/관광지", "맛집/카페", "쇼핑", "기타"]
+                            cur_cat_idx = cat_list.index(spot.get("분류", "놀거리/관광지")) if spot.get("분류") in cat_list else 0
+                            e_s_cat = st.selectbox("분류", cat_list, index=cur_cat_idx)
+                            e_s_note = st.text_area("추천 이유 및 메모", value=spot.get("메모", ""))
+                            
+                            if st.form_submit_button("💾 수정사항 저장"):
+                                current_trip["spots"][idx] = {
+                                    "장소명": e_s_name,
+                                    "주소": e_s_addr,
+                                    "분류": e_s_cat,
+                                    "메모": e_s_note,
+                                    "show_on_map": spot.get("show_on_map", False)
+                                }
+                                save_data(travels)
+                                st.success("장소 정보가 수정되었습니다!")
+                                st.rerun()
+                    st.write("---")
 
-            if delete_idx is not None:
-                del current_trip["hotels"][delete_idx]
-                save_data(travels)
-                st.rerun()
+                if spot_delete_idx is not None:
+                    del current_trip["spots"][spot_delete_idx]
+                    save_data(travels)
+                    st.rerun()
 
-            if st.button("🗑️ 숙소 전체 초기화"):
-                current_trip["hotels"] = []
-                save_data(travels)
-                st.rerun()
+                if st.button("🗑️ 장소 전체 초기화"):
+                    current_trip["spots"] = []
+                    save_data(travels)
+                    st.rerun()
 
-    # [3] 📍 여행지 및 맛집
-    with st.expander("📍 여행지 및 맛집"):
-        with st.form("spot_form"):
-            s_name = st.text_input("장소 이름 (예: 센소지, 도쿄 타워)")
-            s_cat = st.selectbox("분류", ["놀거리/관광지", "맛집/카페", "쇼핑", "기타"])
-            s_note = st.text_area("추천 이유 및 메모")
-            if st.form_submit_button("➕ 장소 추가"):
-                current_trip["spots"].append({
-                    "장소명": s_name, 
-                    "분류": s_cat, 
-                    "메모": s_note,
-                    "show_on_map": False
-                })
-                save_data(travels)
-                st.success("장소가 추가되었습니다!")
-                st.rerun()
+        with col_spot_right:
+            st.subheader("📅 일자별 일정 작성 및 동선")
+            available_places = []
+            for h in current_trip["hotels"]:
+                if h.get("상태") == "예약완료":
+                    available_places.append(f"🏢 {h['숙소명']}")
+            for s in current_trip["spots"]:
+                cat_e = category_emojis.get(s.get("분류"), "📌")
+                available_places.append(f"{cat_e} {s['장소명']}")
+
+            with st.form("schedule_form"):
+                sch_date = st.date_input("일정 날짜 선택", value=date.today())
+                selected_from_list = st.multiselect("📥 저장된 장소 불러오기", options=available_places)
+                sch_content = st.text_area("상세 일정 내용 및 메모")
                 
-        if current_trip["spots"]:
-            st.subheader("📋 등록된 장소 목록")
-            for idx, spot in enumerate(current_trip["spots"]):
-                cat_name = spot.get("분류", "기타")
-                emoji = category_emojis.get(cat_name, "📌")
-                
-                col_s_info, col_s_map = st.columns([4, 1.2])
-                with col_s_info:
-                    st.write(f"{emoji} **[{cat_name}] {spot['장소명']}** — 📝 {spot['메모']}")
-                
-                with col_s_map:
-                    show_map = st.checkbox(
-                        "🗺️ 지도에 표시", 
-                        value=spot.get("show_on_map", False), 
-                        key=f"spot_map_chk_{selected_travel}_{idx}"
+                if st.form_submit_button("➕ 일정 추가"):
+                    current_trip["schedule"].append({
+                        "날짜": sch_date.strftime("%Y-%m-%d"),
+                        "장소목록": list(selected_from_list),
+                        "메모": sch_content
+                    })
+                    save_data(travels)
+                    st.success("일정이 추가되었습니다!")
+                    st.rerun()
+
+        if current_trip["schedule"]:
+            st.markdown("---")
+            st.markdown("### 📌 일자별 상세 동선 및 지도")
+            for sch_idx, sch in enumerate(current_trip["schedule"]):
+                st.markdown(f"#### 🗓️ {sch.get('날짜', f'{sch_idx+1}일차')}")
+                if sch.get("장소목록"):
+                    updated_order = st.multiselect(
+                        f"[{sch.get('날짜')}] 방문 순서 조정",
+                        options=sch["장소목록"],
+                        default=sch["장소목록"],
+                        key=f"order_select_{selected_travel}_{sch_idx}"
                     )
-                    if show_map != spot.get("show_on_map", False):
-                        current_trip["spots"][idx]["show_on_map"] = show_map
+                    if updated_order != sch["장소목록"]:
+                        current_trip["schedule"][sch_idx]["장소목록"] = updated_order
                         save_data(travels)
                         st.rerun()
 
-            if st.button("🗑️ 여행지 전체 초기화"):
-                current_trip["spots"] = []
+                if sch.get("메모"):
+                    st.write(f"📝 메모: {sch['메모']}")
+                
+                if sch.get("장소목록"):
+                    route_queries = [p.split(" ", 1)[-1] for p in sch["장소목록"]]
+                    route_combined = " -> ".join(route_queries)
+                    encoded_route = urllib.parse.quote(route_combined)
+                    route_map_url = f"https://maps.google.com/maps?q={encoded_route}&t=&z=13&ie=UTF8&iwloc=&output=embed"
+                    st.caption(f"🗺️ 이동 동선: {' ➔ '.join(sch['장소목록'])}")
+                    components.iframe(route_map_url, width=600, height=280)
+                st.write("---")
+
+            if st.button("🗑️ 일정 전체 초기화"):
+                current_trip["schedule"] = []
                 save_data(travels)
                 st.rerun()
 
-    # [4] 💰 비용 정산
-    with st.expander("💰 비용 정산"):
+    # ------------------------------------------
+    # [탭 4] 비용 정산
+    # ------------------------------------------
+    with tab_expense:
+        st.subheader("💰 비용 정산 및 1/N 계산")
         with st.form("expense_form"):
             exp_payer = st.text_input("결제한 사람")
             exp_item = st.text_input("결제 항목")
@@ -471,7 +567,7 @@ else:
             total_exp = df_e["금액(원)"].sum()
             
             st.markdown(f"**💵 총 지출 금액: {total_exp:,}원**")
-            num_people = st.number_input("함께한 총 인원수 (1/N 계산용)", min_value=1, value=2)
+            num_people = st.number_input("함께한 총 인원수 (1/N 계산용)", min_value=1, value=2, key="num_people_input")
             per_person = int(total_exp / num_people)
             st.success(f"💡 **1인당 정산 금액**: **{per_person:,}원**")
             
@@ -480,144 +576,57 @@ else:
                 save_data(travels)
                 st.rerun()
 
-    # [5] 📺 추천 영상
-    with st.expander("📺 추천 영상"):
-        with st.form("video_form"):
-            v_title = st.text_input("영상 설명")
-            v_url = st.text_input("유튜브 URL 링크")
-            if st.form_submit_button("➕ 영상 추가"):
-                current_trip["videos"].append({"설명": v_title, "URL": v_url})
-                save_data(travels)
-                st.success("영상이 추가되었습니다!")
-                st.rerun()
-        if current_trip["videos"]:
-            for v in current_trip["videos"]:
-                st.subheader(f"🎬 {v['설명']}")
-                try: st.video(v["URL"])
-                except: st.warning("영상을 불러올 수 없습니다.")
-            if st.button("🗑️ 영상 전체 초기화"):
-                current_trip["videos"] = []
-                save_data(travels)
-                st.rerun()
-
-    # [6] 📸 추억 사진첩
-    with st.expander("📸 추억 사진첩"):
-        uploaded_files = st.file_uploader(
-            "사진 올리기 (PNG, JPG)", 
-            accept_multiple_files=True, 
-            type=['png', 'jpg', 'jpeg'],
-            key=f"uploader_{selected_travel}"
-        )
-        if uploaded_files:
-            cols = st.columns(3)
-            for idx, file in enumerate(uploaded_files):
-                with cols[idx % 3]:
-                    st.image(file, use_column_width=True)
-
     # ------------------------------------------
-    # 2. 하단 영역 (일자별 일정, 장소 불러오기 & 동선 지도)
+    # [탭 5] 준비물 & 추억
     # ------------------------------------------
-    st.write("---")
-    st.header("📌 기본 일정 및 준비물")
-
-    col_left, col_right = st.columns([1.2, 0.8])
-
-    # 1) 불러올 수 있는 후보 목록 조합 (예약 완료 숙소 + 여행지/맛집)
-    available_places = []
-    
-    for h in current_trip["hotels"]:
-        if h.get("상태") == "예약완료":
-            available_places.append(f"🏢 {h['숙소명']}")
-            
-    for s in current_trip["spots"]:
-        cat_e = category_emojis.get(s.get("분류"), "📌")
-        available_places.append(f"{cat_e} {s['장소명']}")
-
-    # 일자별 일정 작성 및 동선 배치
-    with col_left:
-        st.subheader("📅 일자별 일정 작성")
+    with tab_etc:
+        col_c, col_v, col_p = st.columns(3)
         
-        with st.form("schedule_form"):
-            sch_date = st.date_input("일정 날짜 선택", value=date.today())
+        with col_c:
+            st.subheader("🎒 준비물 체크리스트")
+            with st.form("chk_form"):
+                chk_item = st.text_input("준비물 이름 (예: 여권)")
+                chk_assignee = st.text_input("담당자 (선택)")
+                if st.form_submit_button("➕ 추가"):
+                    item_label = f"{chk_item} ({chk_assignee})" if chk_assignee else chk_item
+                    current_trip["checklist"].append({"아이템": item_label, "체크": False})
+                    save_data(travels)
+                    st.rerun()
             
-            selected_from_list = st.multiselect(
-                "📥 입력했던 여행지/숙소 불러오기 (선택 시 내용에 추가됨)", 
-                options=available_places
-            )
-            
-            sch_content = st.text_area("상세 일정 내용 및 추가 메모")
-            
-            if st.form_submit_button("➕ 일정 추가"):
-                combined_places = list(selected_from_list)
-                formatted_date = sch_date.strftime("%Y-%m-%d")
-                
-                current_trip["schedule"].append({
-                    "날짜": formatted_date,
-                    "장소목록": combined_places,
-                    "메모": sch_content
-                })
-                save_data(travels)
-                st.success("일정이 추가되었습니다!")
-                st.rerun()
-
-        # 일자별 일정 및 동선 순서 배치 UI
-        if current_trip["schedule"]:
-            st.markdown("### 📌 일자별 상세 동선 및 지도")
-            
-            for sch_idx, sch in enumerate(current_trip["schedule"]):
-                st.markdown(f"#### 🗓️ {sch.get('날짜', f'{sch_idx+1}일차')}")
-                
-                if sch.get("장소목록"):
-                    st.caption("🔄 **방문 동선 순서 배치 (재선택으로 순서 변경 가능)**")
-                    updated_order = st.multiselect(
-                        f"[{sch.get('날짜')}] 방문 순서 조정",
-                        options=sch["장소목록"],
-                        default=sch["장소목록"],
-                        key=f"order_select_{selected_travel}_{sch_idx}"
-                    )
-                    
-                    if updated_order != sch["장소목록"]:
-                        current_trip["schedule"][sch_idx]["장소목록"] = updated_order
+            if current_trip["checklist"]:
+                for i, item in enumerate(current_trip["checklist"]):
+                    checked = st.checkbox(item["아이템"], value=item["체크"], key=f"chk_{selected_travel}_{i}")
+                    if checked != item["체크"]:
+                        current_trip["checklist"][i]["체크"] = checked
                         save_data(travels)
                         st.rerun()
-
-                if sch.get("메모"):
-                    st.write(f"📝 메모: {sch['메모']}")
-                
-                # 일자별 동선 구글 지도 시각화
-                if sch.get("장소목록"):
-                    route_queries = [p.split(" ", 1)[-1] for p in sch["장소목록"]]
-                    route_combined = " -> ".join(route_queries)
-                    encoded_route = urllib.parse.quote(route_combined)
-                    route_map_url = f"https://maps.google.com/maps?q={encoded_route}&t=&z=13&ie=UTF8&iwloc=&output=embed"
-                    
-                    st.caption(f"🗺️ [{sch.get('날짜')}] 이동 동선: {' ➔ '.join(sch['장소목록'])}")
-                    components.iframe(route_map_url, width=500, height=300)
-                
-                st.write("---")
-
-            if st.button("🗑️ 일정 전체 초기화"):
-                current_trip["schedule"] = []
-                save_data(travels)
-                st.rerun()
-
-    # 준비물 체크리스트
-    with col_right:
-        st.subheader("🎒 준비물 체크리스트")
-        with st.form("chk_form"):
-            chk_item = st.text_input("준비물 이름 (예: 여권, 보조배터리)")
-            if st.form_submit_button("➕ 준비물 추가"):
-                current_trip["checklist"].append({"아이템": chk_item, "체크": False})
-                save_data(travels)
-                st.rerun()
-        
-        if current_trip["checklist"]:
-            for i, item in enumerate(current_trip["checklist"]):
-                checked = st.checkbox(item["아이템"], value=item["체크"], key=f"chk_{selected_travel}_{i}")
-                if checked != item["체크"]:
-                    current_trip["checklist"][i]["체크"] = checked
+                if st.button("🗑️ 준비물 초기화"):
+                    current_trip["checklist"] = []
                     save_data(travels)
-            if st.button("🗑️ 준비물 전체 초기화"):
-                current_trip["checklist"] = []
-                save_data(travels)
-                st.rerun()
+                    st.rerun()
+
+        with col_v:
+            st.subheader("📺 추천 유튜브 영상")
+            with st.form("video_form"):
+                v_title = st.text_input("영상 설명")
+                v_url = st.text_input("유튜브 URL 링크")
+                if st.form_submit_button("➕ 영상 추가"):
+                    current_trip["videos"].append({"설명": v_title, "URL": v_url})
+                    save_data(travels)
+                    st.rerun()
+            if current_trip["videos"]:
+                for v in current_trip["videos"]:
+                    st.text(f"🎬 {v['설명']}")
+                    try: st.video(v["URL"])
+                    except: pass
+                if st.button("🗑️ 영상 초기화"):
+                    current_trip["videos"] = []
+                    save_data(travels)
+                    st.rerun()
+
+        with col_p:
+            st.subheader("📸 추억 사진첩")
+            uploaded_files = st.file_uploader("사진 올리기", accept_multiple_files=True, type=['png', 'jpg', 'jpeg'], key=f"uploader_{selected_travel}")
+            if uploaded_files:
+                for file in uploaded_files:
+                    st.image(file, use_column_width=True)
