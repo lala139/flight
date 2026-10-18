@@ -137,6 +137,7 @@ else:
             with c4: ret_arr_t = st.time_input("귀국 도착 시간", value=pd.to_datetime("16:40").time())
             
             price = st.number_input("총합 가격 (원)", min_value=0, step=1000, value=300000)
+            is_discount = st.checkbox("🏷️ 특가 / 할인가 적용 항공권인가요?")
 
             if st.form_submit_button("➕ 항공권 추가"):
                 current_trip["flights"].append({
@@ -145,6 +146,7 @@ else:
                     "귀국 항공사": ret_airline,
                     "귀국 시간": f"{ret_dep_t.strftime('%H:%M')} -> {ret_arr_t.strftime('%H:%M')}",
                     "총합 가격(원)": price,
+                    "할인여부": "할인가" if is_discount else "정가",
                     "상태": "후보"
                 })
                 save_data(travels)
@@ -164,14 +166,16 @@ else:
                                flight['출국 항공사'] == cheapest_item['출국 항공사'] and 
                                flight['총합 가격(원)'] == cheapest_item['총합 가격(원)'])
                 
+                discount_tag = "🔥 [할인가]" if flight.get("할인여부") == "할인가" else "🏷️ [정가]"
+
                 col_info, col_chk = st.columns([4, 1])
                 with col_info:
                     if flight.get("상태") == "구매완료":
-                        st.success(f"✅ **[구매 완료]** {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | **{price_fmt}**")
+                        st.success(f"✅ **[구매 완료]** {discount_tag} {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | **{price_fmt}**")
                     elif is_cheapest:
-                        st.info(f"💡 **[최저가 추천]** {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | **{price_fmt}**")
+                        st.info(f"💡 **[최저가 추천]** {discount_tag} {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | **{price_fmt}**")
                     else:
-                        st.text(f"▫️ [후보] {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | {price_fmt}")
+                        st.text(f"▫️ [후보] {discount_tag} {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | {price_fmt}")
                 
                 with col_chk:
                     is_now_booked = st.checkbox("구매완료", value=(flight.get("상태") == "구매완료"), key=f"f_status_{selected_travel}_{idx}")
@@ -186,12 +190,13 @@ else:
                 save_data(travels)
                 st.rerun()
 
-    # [2] 숙소 후보 (링크 기능 추가)
+    # [2] 숙소 후보
     with st.expander("🏨 숙소 후보"):
         with st.form("hotel_form"):
             h_name = st.text_input("숙소 이름")
             h_loc = st.text_input("위치 / 지역")
             h_price = st.number_input("1박 가격 (원)", min_value=0, step=5000, value=100000)
+            is_h_discount = st.checkbox("🏷️ 특가 / 할인가 적용 숙소인가요?")
             h_link = st.text_input("숙소 링크 (URL)", placeholder="https://www.agoda.com 또는 https://www.airbnb.co.kr...")
             h_note = st.text_area("특징 및 메모")
             
@@ -200,6 +205,7 @@ else:
                     "숙소명": h_name,
                     "위치": h_loc,
                     "1박 가격(원)": h_price,
+                    "할인여부": "할인가" if is_h_discount else "정가",
                     "링크": h_link,
                     "메모": h_note,
                     "상태": "후보"
@@ -221,16 +227,17 @@ else:
                                  hotel['숙소명'] == cheapest_hotel['숙소명'] and 
                                  hotel['1박 가격(원)'] == cheapest_hotel['1박 가격(원)'])
                 url = hotel.get("링크", "").strip()
+                h_discount_tag = "🔥 [할인가]" if hotel.get("할인여부") == "할인가" else "🏷️ [정가]"
 
                 col_info, col_link, col_chk = st.columns([3, 1, 1])
                 
                 with col_info:
                     if hotel.get("상태") == "예약완료":
-                        st.success(f"✅ **[예약 완료]** {hotel['숙소명']} ({hotel['위치']}) | 1박: {h_price_fmt} | 메모: {hotel['메모']}")
+                        st.success(f"✅ **[예약 완료]** {h_discount_tag} {hotel['숙소명']} ({hotel['위치']}) | 1박: {h_price_fmt} | 메모: {hotel['메모']}")
                     elif is_cheapest_h:
-                        st.info(f"💡 **[추천 가성비]** {hotel['숙소명']} ({hotel['위치']}) | 1박: {h_price_fmt} | 메모: {hotel['메모']}")
+                        st.info(f"💡 **[추천 가성비]** {h_discount_tag} {hotel['숙소명']} ({hotel['위치']}) | 1박: {h_price_fmt} | 메모: {hotel['메모']}")
                     else:
-                        st.text(f"▫️ [후보] {hotel['숙소명']} ({hotel['위치']}) | 1박: {h_price_fmt} | 메모: {hotel['메모']}")
+                        st.text(f"▫️ [후보] {h_discount_tag} {hotel['숙소명']} ({hotel['위치']}) | 1박: {h_price_fmt} | 메모: {hotel['메모']}")
                 
                 with col_link:
                     if url:
