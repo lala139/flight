@@ -6,6 +6,7 @@ import requests
 import yfinance as yf
 import urllib.parse
 import streamlit.components.v1 as components
+from datetime import date
 
 # --- 데이터 저장 파일 (JSON) ---
 DB_FILE = "travel_data.json"
@@ -106,7 +107,7 @@ else:
     st.caption(f"📅 여행 일정: {current_trip['info']['period']}")
     
     # ------------------------------------------
-    # 지도 표시용 검색 쿼리 수집 로직
+    # 상단 메인 지도 표시용 검색 쿼리 수집
     # ------------------------------------------
     map_queries = []
     
@@ -144,14 +145,13 @@ else:
             st.caption(f"• **{k}**: {v}원")
     
     with col_dash_right:
-        st.subheader("🗺️ 실시간 위치 지도")
+        st.subheader("🗺️ 전체 관심 장소 지도")
         if map_queries:
-            # 여러 위치를 구글 지도 검색 쿼리로 결합
             combined_query = " OR ".join(map_queries)
             encoded_query = urllib.parse.quote(combined_query)
             map_url = f"https://maps.google.com/maps?q={encoded_query}&t=&z=13&ie=UTF8&iwloc=&output=embed"
             components.iframe(map_url, width=400, height=400)
-            st.caption(f"📍 현재 지도 표시 항목: {', '.join(map_queries)}")
+            st.caption(f"📍 지도 표시 항목: {', '.join(map_queries)}")
         else:
             default_query = urllib.parse.quote(city_query)
             map_url = f"https://maps.google.com/maps?q={default_query}&t=&z=12&ie=UTF8&iwloc=&output=embed"
@@ -232,7 +232,7 @@ else:
                 save_data(travels)
                 st.rerun()
 
-    # [2] 🏢 숙소 후보 (건물 이모지 & 지도 자동 연동)
+    # [2] 🏢 숙소 후보
     with st.expander("🏢 숙소 후보"):
         with st.form("hotel_form"):
             h_name = st.text_input("숙소 이름")
@@ -344,7 +344,7 @@ else:
                 save_data(travels)
                 st.rerun()
 
-    # [3] 📍 여행지 및 맛집 (이모지 분류 & 지도 토글 버튼)
+    # [3] 📍 여행지 및 맛집
     with st.expander("📍 여행지 및 맛집"):
         with st.form("spot_form"):
             s_name = st.text_input("장소 이름 (예: 센소지, 도쿄 타워)")
@@ -434,9 +434,14 @@ else:
                 save_data(travels)
                 st.rerun()
 
-    # [6] 📸 추억 사진첩
+    # [6] 📸 추억 사진첩 (폴더별 독립 연동 버그 수정)
     with st.expander("📸 추억 사진첩"):
-        uploaded_files = st.file_uploader("사진 올리기 (PNG, JPG)", accept_multiple_files=True, type=['png', 'jpg', 'jpeg'])
+        uploaded_files = st.file_uploader(
+            "사진 올리기 (PNG, JPG)", 
+            accept_multiple_files=True, 
+            type=['png', 'jpg', 'jpeg'],
+            key=f"uploader_{selected_travel}"
+        )
         if uploaded_files:
             cols = st.columns(3)
             for idx, file in enumerate(uploaded_files):
@@ -444,29 +449,92 @@ else:
                     st.image(file, use_column_width=True)
 
     # ------------------------------------------
-    # 2. 하단 영역 (일자별 일정 & 준비물)
+    # 2. 하단 영역 (일자별 일정, 장소 불러오기 & 동선 지도)
     # ------------------------------------------
     st.write("---")
     st.header("📌 기본 일정 및 준비물")
 
-    col_left, col_right = st.columns(2)
+    col_left, col_right = st.columns([1.2, 0.8])
 
-    # 일자별 일정
+    # 1) 불러올 수 있는 후보 목록 조합 (예약 완료 숙소 + 여행지/맛집)
+    available_places = []
+    
+    # 예약 확정 숙소만 띄우기
+    for h in current_trip["hotels"]:
+        if h.get("상태") == "예약완료":
+            available_places.append(f"🏢 {h['숙소명']}")
+            
+    # 여행지/맛집 불러오기
+    for s in current_trip["spots"]:
+        cat_e = category_emojis.get(s.get("분류"), "📌")
+        available_places.append(f"{cat_e} {s['장소명']}")
+
+    # 일자별 일정 작성 및 동선 배치
     with col_left:
-        st.subheader("📅 일자별 일정")
+        st.subheader("📅 일자별 일정 작성")
+        
         with st.form("schedule_form"):
-            sch_day = st.text_input("일자 (예: 1일차, 7월 10일)")
-            sch_content = st.text_area("상세 일정 내용")
+            sch_date = st.date_input("일정 날짜 선택", value=date.today())
+            
+            # 등록해둔 장소에서 불러오기 (다중 선택 드롭다운)
+            selected_from_list = st.multiselect(
+                "📥 입력했던 여행지/숙소 불러오기 (선택 시 내용에 추가됨)", 
+                options=available_places
+            )
+            
+            sch_content = st.text_area("상세 일정 내용 및 추가 메모")
+            
             if st.form_submit_button("➕ 일정 추가"):
-                current_trip["schedule"].append({"일자": sch_day, "내용": sch_content})
+                # 불러온 장소들과 메모 결합
+                combined_places = list(selected_from_list)
+                formatted_date = sch_date.strftime("%Y-%m-%d")
+                
+                current_trip["schedule"].append({
+                    "날짜": formatted_date,
+                    "장소목록": combined_places,
+                    "메모": sch_content
+                })
                 save_data(travels)
                 st.success("일정이 추가되었습니다!")
                 st.rerun()
-        
+
+        # 일자별 일정 및 동선 순서 배치 UI
         if current_trip["schedule"]:
-            for sch in current_trip["schedule"]:
-                st.markdown(f"**📌 [{sch['일자']}]**\n{sch['내용']}")
+            st.markdown("### 📌 일자별 상세 동선 및 지도")
+            
+            for sch_idx, sch in enumerate(current_trip["schedule"]):
+                st.markdown(f"#### 🗓️ {sch.get('날짜', f'{sch_idx+1}일차')}")
+                
+                if sch.get("장소목록"):
+                    st.caption("🔄 **방문 동선 순서 배치 (드래그/재선택으로 순서 변경 가능)**")
+                    # 일정별 방문 장소 순서 정렬 UI
+                    updated_order = st.multiselect(
+                        f"[{sch.get('날짜')}] 방문 순서 조정",
+                        options=sch["장소목록"],
+                        default=sch["장소목록"],
+                        key=f"order_select_{selected_travel}_{sch_idx}"
+                    )
+                    
+                    if updated_order != sch["장소목록"]:
+                        current_trip["schedule"][sch_idx]["장소목록"] = updated_order
+                        save_data(travels)
+                        st.rerun()
+
+                if sch.get("메모"):
+                    st.write(f"📝 메모: {sch['메모']}")
+                
+                # 일자별 동선 구글 지도 시각화
+                if sch.get("장소목록"):
+                    route_queries = [p.split(" ", 1)[-1] for p in sch["장소목록"]] # 이모지 제거 후 검색
+                    route_combined = " -> ".join(route_queries)
+                    encoded_route = urllib.parse.quote(route_combined)
+                    route_map_url = f"https://maps.google.com/maps?q={encoded_route}&t=&z=13&ie=UTF8&iwloc=&output=embed"
+                    
+                    st.caption(f"🗺️ [{sch.get('날짜')}] 이동 동선: {' ➔ '.join(sch['장소목록'])}")
+                    components.iframe(route_map_url, width=500, height=300)
+                
                 st.write("---")
+
             if st.button("🗑️ 일정 전체 초기화"):
                 current_trip["schedule"] = []
                 save_data(travels)
