@@ -159,27 +159,30 @@ else:
     st.caption(f"📅 여행 일정: {current_trip['info']['period']}")
     
     # ------------------------------------------
-    # 지도 검색 쿼리 수집 (체크된 항목만 엄격 반영)
+    # 단일 선택 지도용 장소 데이터 구조화
     # ------------------------------------------
     city_query = current_trip['info'].get('city', 'Seoul')
-    map_queries = []
-    
-    # 1. 숙소 중 '지도에 표시' 체크된 항목만 수집
+    map_selectable_dict = {}
+
+    # 1. 숙소 중 '지도에 표시' 체크된 항목
     for h in current_trip["hotels"]:
         if h.get("show_on_map", False):
             q = h.get("위치").strip() if h.get("위치") else h.get("숙소명").strip()
             if q:
-                map_queries.append(f"{city_query} {q}")
+                label = f"🏢 {h['숙소명']}"
+                map_selectable_dict[label] = f"{city_query} {q}"
 
-    # 2. 장소 중 '지도에 표시' 체크된 항목만 수집
+    # 2. 장소 중 '지도에 표시' 체크된 항목
     for spot in current_trip["spots"]:
         if spot.get("show_on_map", False):
             spot_q = spot.get("주소").strip() if spot.get("주소") else spot.get("장소명").strip()
             if spot_q:
-                map_queries.append(f"{city_query} {spot_q}")
+                cat_e = category_emojis.get(spot.get("분류"), "📌")
+                label = f"{cat_e} {spot['장소명']}"
+                map_selectable_dict[label] = f"{city_query} {spot_q}"
 
     # ==========================================
-    # [상시 고정 대시보드 및 전체 지도 영역]
+    # [상시 고정 대시보드 및 단일 장소 지도 영역]
     # ==========================================
     st.markdown("---")
     col_dash_left, col_dash_right = st.columns([1, 1])
@@ -209,18 +212,25 @@ else:
                     st.rerun()
     
     with col_dash_right:
-        st.subheader("🗺️ 선택된 장소 지도")
-        if map_queries:
-            combined_query = " OR ".join([f'"{q}"' for q in map_queries])
-            encoded_query = urllib.parse.quote(combined_query)
-            map_url = f"https://maps.google.com/maps?q={encoded_query}&t=&z=13&ie=UTF8&iwloc=&output=embed"
-            components.iframe(map_url, width=450, height=420)
-            st.caption(f"📍 현재 지도 표시 중인 항목: {len(map_queries)}개")
+        st.subheader("🗺️ 장소 확인 지도")
+        if map_selectable_dict:
+            selected_spot_label = st.selectbox(
+                "🎯 지도에 정확히 띄울 장소를 선택하세요",
+                options=list(map_selectable_dict.keys()),
+                key=f"single_map_select_{selected_travel}"
+            )
+            
+            target_query = map_selectable_dict[selected_spot_label]
+            encoded_query = urllib.parse.quote(target_query)
+            # z=15로 확대 수준을 높여 해당 장소 1개만 정확하게 조명
+            map_url = f"https://maps.google.com/maps?q={encoded_query}&t=&z=15&ie=UTF8&iwloc=&output=embed"
+            components.iframe(map_url, width=450, height=380)
+            st.caption(f"📍 현재 확인 중인 위치: {target_query}")
         else:
             default_query = urllib.parse.quote(city_query)
             map_url = f"https://maps.google.com/maps?q={default_query}&t=&z=12&ie=UTF8&iwloc=&output=embed"
             components.iframe(map_url, width=450, height=420)
-            st.caption("💡 숙소나 장소 목록에서 '지도 표시'를 체크해 보세요!")
+            st.caption("💡 하단 목록에서 숙소나 장소의 '지도 표시'를 체크해 보세요!")
 
     st.markdown("---")
 
