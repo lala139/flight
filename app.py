@@ -4,6 +4,8 @@ import json
 import os
 import requests
 import yfinance as yf
+import urllib.parse
+import streamlit.components.v1 as components
 from datetime import date
 
 # --- 데이터 저장 파일 (JSON) ---
@@ -168,13 +170,41 @@ else:
     
     city_query = current_trip['info'].get('city', 'Seoul')
     
+    # ------------------------------------------
+    # 단일 선택 지도용 장소 데이터 구조화 (이름 정제 및 주소 결합)
+    # ------------------------------------------
+    map_selectable_dict = {}
+
+    # 1. 숙소 중 '지도에 표시' 체크된 항목
+    for h in current_trip["hotels"]:
+        if h.get("show_on_map", False):
+            raw_h_name = h.get("숙소명", "").strip()
+            clean_h_name = raw_h_name.split("(")[0].strip()
+            loc = h.get("위치", "").strip()
+            if clean_h_name:
+                label = f"🏢 {clean_h_name}"
+                query_target = f"{clean_h_name} {loc}" if loc else f"{city_query} {clean_h_name}"
+                map_selectable_dict[label] = query_target
+
+    # 2. 장소 중 '지도에 표시' 체크된 항목
+    for spot in current_trip["spots"]:
+        if spot.get("show_on_map", False):
+            raw_s_name = spot.get("장소명", "").strip() or spot.get("이름", "").strip()
+            clean_s_name = raw_s_name.split("(")[0].strip()
+            addr = spot.get("주소", "").strip()
+            if clean_s_name:
+                cat_e = category_emojis.get(spot.get("분류"), "📌")
+                label = f"{cat_e} {clean_s_name}"
+                query_target = f"{clean_s_name} {addr}" if addr else f"{city_query} {clean_s_name}"
+                map_selectable_dict[label] = query_target
+
     # ==========================================
-    # [상시 고정 대시보드 (날씨, 환율, 긴급 연락처)]
+    # [상시 고정 대시보드 및 단일 장소 지도 영역]
     # ==========================================
     st.markdown("---")
-    col_dash_1, col_dash_2 = st.columns([1, 1])
+    col_dash_left, col_dash_right = st.columns([1, 1])
     
-    with col_dash_1:
+    with col_dash_left:
         weather_info = get_weather(city_query)
         st.metric(label=f"🌤️ {city_query} 실시간 날씨", value=weather_info)
         
@@ -184,7 +214,7 @@ else:
         for k, v in rates.items():
             st.caption(f"• **{k}**: {v}원")
             
-    with col_dash_2:
+        st.markdown("---")
         st.write("🚨 **현지 긴급 연락처 (자동 연동)**")
         embassy_info = current_trip.get("embassy", "")
         st.info(embassy_info)
@@ -197,6 +227,27 @@ else:
                     save_data(travels)
                     st.success("긴급 연락처가 저장되었습니다!")
                     st.rerun()
+    
+    with col_dash_right:
+        st.subheader("🗺️ 장소 확인 지도")
+        if map_selectable_dict:
+            selected_spot_label = st.selectbox(
+                "🎯 지도에 정확히 띄울 장소를 선택하세요",
+                options=list(map_selectable_dict.keys()),
+                key=f"single_map_select_{selected_travel}"
+            )
+            
+            target_query = map_selectable_dict[selected_spot_label]
+            encoded_query = urllib.parse.quote(target_query)
+            # z=16으로 설정해 선택한 장소 1개만 정확하게 줌인
+            map_url = f"https://maps.google.com/maps?q={encoded_query}&t=&z=16&ie=UTF8&iwloc=&output=embed"
+            components.iframe(map_url, width=450, height=380)
+            st.caption(f"📍 현재 확인 중인 위치: {target_query}")
+        else:
+            default_query = urllib.parse.quote(city_query)
+            map_url = f"https://maps.google.com/maps?q={default_query}&t=&z=12&ie=UTF8&iwloc=&output=embed"
+            components.iframe(map_url, width=450, height=420)
+            st.caption("💡 하단 목록에서 숙소나 장소의 '지도 표시'를 체크해 보세요!")
 
     st.markdown("---")
 
@@ -287,7 +338,7 @@ else:
         with sub_tab_h:
             with st.form("hotel_form"):
                 h_name = st.text_input("숙소 이름")
-                h_loc = st.text_input("위치 / 주소")
+                h_loc = st.text_input("위치 / 주소 (지도 표시용)")
                 h_price = st.number_input("1박 가격 (원)", min_value=0, step=5000, value=100000)
                 is_h_discount = st.checkbox("🏷️ 특가 / 할인가 적용 숙소인가요?")
                 h_link = st.text_input("숙소 링크 (URL)", placeholder="https://www.agoda.com 또는 https://www.airbnb.co.kr...")
@@ -301,7 +352,8 @@ else:
                         "할인여부": "할인가" if is_h_discount else "정가",
                         "링크": h_link,
                         "메모": h_note,
-                        "상태": "후보"
+                        "상태": "후보",
+                        "show_on_map": False
                     })
                     save_data(travels)
                     st.success("숙소가 추가되었습니다!")
@@ -322,7 +374,7 @@ else:
                     url = hotel.get("링크", "").strip()
                     h_discount_tag = "🔥 [할인가]" if hotel.get("할인여부") == "할인가" else "🏷️ [정가]"
 
-                    c_text, c_actions = st.columns([3, 2])
+                    c_text, c_actions = st.columns([3, 3])
                     with c_text:
                         if hotel.get("상태") == "예약완료":
                             st.success(f"✅ **[예약 완료]** 🏢 **{hotel['숙소명']}** ({hotel['위치']}) | {h_discount_tag} 1박: {h_price_fmt}\n\n📝 메모: {hotel['메모']}")
@@ -332,7 +384,7 @@ else:
                             st.write(f"🏢 **{hotel['숙소명']}** ({hotel['위치']}) | {h_discount_tag} 1박: {h_price_fmt} | 📝 {hotel['메모']}")
                     
                     with c_actions:
-                        col_sub1, col_sub2, col_sub3 = st.columns([1.2, 1, 0.8])
+                        col_sub1, col_sub2, col_sub3, col_sub4 = st.columns([1, 1, 1, 0.8])
                         with col_sub1:
                             is_h_booked = st.checkbox("예약완료", value=(hotel.get("상태") == "예약완료"), key=f"h_status_{selected_travel}_{idx}")
                             new_h_status = "예약완료" if is_h_booked else "후보"
@@ -341,13 +393,19 @@ else:
                                 save_data(travels)
                                 st.rerun()
                         with col_sub2:
+                            show_h_map = st.checkbox("지도 표시", value=hotel.get("show_on_map", False), key=f"hotel_map_chk_{selected_travel}_{idx}")
+                            if show_h_map != hotel.get("show_on_map", False):
+                                current_trip["hotels"][idx]["show_on_map"] = show_h_map
+                                save_data(travels)
+                                st.rerun()
+                        with col_sub3:
                             if url:
                                 if not (url.startswith("http://") or url.startswith("https://")):
                                     url = "https://" + url
                                 st.link_button("🔗 이동", url)
                             else:
                                 st.caption("링크없음")
-                        with col_sub3:
+                        with col_sub4:
                             if st.button("🗑️", key=f"h_del_btn_{selected_travel}_{idx}"):
                                 delete_idx = idx
 
@@ -367,7 +425,8 @@ else:
                                     "숙소명": e_name, "위치": e_loc, "1박 가격(원)": e_price,
                                     "할인여부": "할인가" if e_is_discount else "정가",
                                     "링크": e_link, "메모": e_note,
-                                    "상태": hotel.get("상태", "후보")
+                                    "상태": hotel.get("상태", "후보"),
+                                    "show_on_map": hotel.get("show_on_map", False)
                                 }
                                 save_data(travels)
                                 st.success("수정되었습니다!")
@@ -394,7 +453,7 @@ else:
             st.subheader("📍 관광지 및 맛집 등록")
             with st.form("spot_form"):
                 s_name = st.text_input("장소 이름 (예: 센소지, 도쿄 타워)")
-                s_addr = st.text_input("상세 주소 (선택)")
+                s_addr = st.text_input("상세 주소 (예: 도쿄도 다이토구 아사쿠사 2-3-1) - 지도 검색용")
                 s_cat = st.selectbox("분류", ["놀거리/관광지", "맛집/카페", "쇼핑", "기타"])
                 s_note = st.text_area("추천 이유 및 메모")
                 
@@ -403,7 +462,8 @@ else:
                         "장소명": s_name, 
                         "주소": s_addr,
                         "분류": s_cat, 
-                        "메모": s_note
+                        "메모": s_note,
+                        "show_on_map": False
                     })
                     save_data(travels)
                     st.success("장소가 추가되었습니다!")
@@ -424,6 +484,12 @@ else:
                         st.write(f"{emoji} **[{cat_name}] {s_disp_name}**{addr_str}\n\n📝 {spot['메모']}")
                     
                     with col_s_actions:
+                        show_map = st.checkbox("🗺️ 지도 표시", value=spot.get("show_on_map", False), key=f"spot_map_chk_{selected_travel}_{idx}")
+                        if show_map != spot.get("show_on_map", False):
+                            current_trip["spots"][idx]["show_on_map"] = show_map
+                            save_data(travels)
+                            st.rerun()
+                            
                         if st.button("🗑️ 삭제", key=f"spot_del_btn_{selected_travel}_{idx}"):
                             spot_delete_idx = idx
 
@@ -444,7 +510,8 @@ else:
                                     "장소명": e_s_name,
                                     "주소": e_s_addr,
                                     "분류": e_s_cat,
-                                    "메모": e_s_note
+                                    "메모": e_s_note,
+                                    "show_on_map": spot.get("show_on_map", False)
                                 }
                                 save_data(travels)
                                 st.success("장소 정보가 수정되었습니다!")
@@ -630,3 +697,4 @@ else:
             for file in uploaded_files:
                 st.image(file, caption=file.name, use_column_width=True)
                 st.markdown("---")
+                        
