@@ -154,7 +154,6 @@ else:
         if current_trip["flights"]:
             st.subheader("📋 등록된 항공권 비교 목록")
             
-            # 가격 오름차순 정렬하여 최저가 파악
             df_temp = pd.DataFrame(current_trip["flights"])
             df_sorted = df_temp.sort_values(by="총합 가격(원)", ascending=True).reset_index(drop=True)
             cheapest_item = df_sorted.iloc[0] if not df_sorted.empty else None
@@ -167,13 +166,10 @@ else:
                 
                 col_info, col_chk = st.columns([4, 1])
                 with col_info:
-                    # 1. 구매 완료된 항목 (초록색)
                     if flight.get("상태") == "구매완료":
                         st.success(f"✅ **[구매 완료]** {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | **{price_fmt}**")
-                    # 2. 최저가 추천 항목 (파란색)
                     elif is_cheapest:
                         st.info(f"💡 **[최저가 추천]** {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | **{price_fmt}**")
-                    # 3. 일반 후보 항목 (회색 느낌의 기본 텍스트)
                     else:
                         st.text(f"▫️ [후보] {flight['출국 항공사']} ({flight['출국 시간']}) ↔ {flight['귀국 항공사']} ({flight['귀국 시간']}) | {price_fmt}")
                 
@@ -190,12 +186,13 @@ else:
                 save_data(travels)
                 st.rerun()
 
-    # [2] 숙소 후보
+    # [2] 숙소 후보 (링크 기능 추가)
     with st.expander("🏨 숙소 후보"):
         with st.form("hotel_form"):
             h_name = st.text_input("숙소 이름")
             h_loc = st.text_input("위치 / 지역")
             h_price = st.number_input("1박 가격 (원)", min_value=0, step=5000, value=100000)
+            h_link = st.text_input("숙소 링크 (URL)", placeholder="https://www.agoda.com 또는 https://www.airbnb.co.kr...")
             h_note = st.text_area("특징 및 메모")
             
             if st.form_submit_button("➕ 숙소 추가"):
@@ -203,6 +200,7 @@ else:
                     "숙소명": h_name,
                     "위치": h_loc,
                     "1박 가격(원)": h_price,
+                    "링크": h_link,
                     "메모": h_note,
                     "상태": "후보"
                 })
@@ -222,19 +220,26 @@ else:
                 is_cheapest_h = (cheapest_hotel is not None and 
                                  hotel['숙소명'] == cheapest_hotel['숙소명'] and 
                                  hotel['1박 가격(원)'] == cheapest_hotel['1박 가격(원)'])
+                url = hotel.get("링크", "").strip()
+
+                col_info, col_link, col_chk = st.columns([3, 1, 1])
                 
-                col_info, col_chk = st.columns([4, 1])
                 with col_info:
-                    # 1. 예약 완료된 항목 (초록색)
                     if hotel.get("상태") == "예약완료":
                         st.success(f"✅ **[예약 완료]** {hotel['숙소명']} ({hotel['위치']}) | 1박: {h_price_fmt} | 메모: {hotel['메모']}")
-                    # 2. 최저가(가장 저렴한 숙소) 추천 항목 (파란색)
                     elif is_cheapest_h:
                         st.info(f"💡 **[추천 가성비]** {hotel['숙소명']} ({hotel['위치']}) | 1박: {h_price_fmt} | 메모: {hotel['메모']}")
-                    # 3. 일반 후보 항목 (회색)
                     else:
                         st.text(f"▫️ [후보] {hotel['숙소명']} ({hotel['위치']}) | 1박: {h_price_fmt} | 메모: {hotel['메모']}")
                 
+                with col_link:
+                    if url:
+                        if not (url.startswith("http://") or url.startswith("https://")):
+                            url = "https://" + url
+                        st.link_button("🔗 숙소 바로가기", url)
+                    else:
+                        st.caption("링크 없음")
+
                 with col_chk:
                     is_h_booked = st.checkbox("예약완료", value=(hotel.get("상태") == "예약완료"), key=f"h_status_{selected_travel}_{idx}")
                     new_h_status = "예약완료" if is_h_booked else "후보"
@@ -326,7 +331,7 @@ else:
     # 2. 하단 상시 고정 영역 (일자별 일정 & 준비물)
     # ------------------------------------------
     st.write("---")
-    st.header("📌 기본 일정 및 준비물")
+    st.header("📌 기본 일정 및 준비물 (상시 고정)")
 
     col_left, col_right = st.columns(2)
 
