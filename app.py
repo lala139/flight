@@ -24,6 +24,10 @@ def load_data():
                     if "가격" not in f_item and "총합 가격(원)" in f_item:
                         f_item["가격"] = f_item["총합 가격(원)"]
                     f_item.setdefault("가격", 300000)
+                for s_item in trip.get("spots", []):
+                    if "이름" not in s_item and "장소명" in s_item:
+                        s_item["이름"] = s_item["장소명"]
+                    s_item.setdefault("이름", "장소")
             return data
     return {}
 
@@ -224,8 +228,9 @@ else:
             if trip["spots"]:
                 for idx, s in enumerate(trip["spots"]):
                     emoji = CATEGORY_EMOJIS.get(s['분류'], "📌")
+                    s_name = s.get('이름', s.get('장소명', ''))
                     cols = st.columns([4, 1])
-                    cols[0].write(f"{emoji} [{s['분류']}] {s['이름']}")
+                    cols[0].write(f"{emoji} [{s['분류']}] {s_name}")
                     if cols[1].button("삭제", key=f"del_s_{idx}"):
                         trip["spots"].pop(idx)
                         save_data(travels)
