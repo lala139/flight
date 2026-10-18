@@ -130,10 +130,10 @@ else:
             q = spot.get("장소명")
             if q: map_queries.append(f"{cat_emoji} {q}")
 
-    # --- 대시보드: 좌측(날씨 & 환율), 우측(정사각형 구글 지도) ---
+    # --- 대시보드: 좌측(날씨, 환율, 현지 긴급 연락처), 우측(정사각형 구글 지도) ---
     col_dash_left, col_dash_right = st.columns([1, 1])
     
-   with col_dash_left:
+    with col_dash_left:
         city_query = current_trip['info'].get('city', 'Seoul')
         weather_info = get_weather(city_query)
         st.metric(label=f"🌤️ {city_query} 실시간 날씨", value=weather_info)
@@ -160,6 +160,7 @@ else:
                     save_data(travels)
                     st.success("긴급 연락처가 저장되었습니다!")
                     st.rerun()
+    
     with col_dash_right:
         st.subheader("🗺️ 전체 관심 장소 지도")
         if map_queries:
@@ -450,7 +451,7 @@ else:
                 save_data(travels)
                 st.rerun()
 
-    # [6] 📸 추억 사진첩 (폴더별 독립 연동 버그 수정)
+    # [6] 📸 추억 사진첩
     with st.expander("📸 추억 사진첩"):
         uploaded_files = st.file_uploader(
             "사진 올리기 (PNG, JPG)", 
@@ -501,7 +502,6 @@ else:
             sch_content = st.text_area("상세 일정 내용 및 추가 메모")
             
             if st.form_submit_button("➕ 일정 추가"):
-                # 불러온 장소들과 메모 결합
                 combined_places = list(selected_from_list)
                 formatted_date = sch_date.strftime("%Y-%m-%d")
                 
@@ -522,8 +522,7 @@ else:
                 st.markdown(f"#### 🗓️ {sch.get('날짜', f'{sch_idx+1}일차')}")
                 
                 if sch.get("장소목록"):
-                    st.caption("🔄 **방문 동선 순서 배치 (드래그/재선택으로 순서 변경 가능)**")
-                    # 일정별 방문 장소 순서 정렬 UI
+                    st.caption("🔄 **방문 동선 순서 배치 (재선택으로 순서 변경 가능)**")
                     updated_order = st.multiselect(
                         f"[{sch.get('날짜')}] 방문 순서 조정",
                         options=sch["장소목록"],
@@ -541,7 +540,7 @@ else:
                 
                 # 일자별 동선 구글 지도 시각화
                 if sch.get("장소목록"):
-                    route_queries = [p.split(" ", 1)[-1] for p in sch["장소목록"]] # 이모지 제거 후 검색
+                    route_queries = [p.split(" ", 1)[-1] for p in sch["장소목록"]]
                     route_combined = " -> ".join(route_queries)
                     encoded_route = urllib.parse.quote(route_combined)
                     route_map_url = f"https://maps.google.com/maps?q={encoded_route}&t=&z=13&ie=UTF8&iwloc=&output=embed"
