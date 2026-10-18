@@ -14,20 +14,43 @@ def load_data():
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            # 기존 데이터와 새 키 호환성 자동 보정
+            # 기존 저장된 데이터와 최신 코드의 키 호환성 완벽 보정
             for trip in data.values():
+                # 1. 숙소 데이터 보정
                 for h in trip.get("hotels", []):
                     if "가격" not in h and "1박 가격(원)" in h:
                         h["가격"] = h["1박 가격(원)"]
                     h.setdefault("가격", 100000)
+                    h.setdefault("숙소명", "숙소")
+                    h.setdefault("위치", "")
+                
+                # 2. 항공권 데이터 보정
                 for f_item in trip.get("flights", []):
                     if "가격" not in f_item and "총합 가격(원)" in f_item:
                         f_item["가격"] = f_item["총합 가격(원)"]
                     f_item.setdefault("가격", 300000)
+                    f_item.setdefault("출국", "제주항공")
+                    f_item.setdefault("귀국", "제주항공")
+                
+                # 3. 장소 데이터 보정
                 for s_item in trip.get("spots", []):
                     if "이름" not in s_item and "장소명" in s_item:
                         s_item["이름"] = s_item["장소명"]
                     s_item.setdefault("이름", "장소")
+                    s_item.setdefault("분류", "기타")
+
+                # 4. 일정 데이터 보정 (KeyError 원인 해결)
+                for sc_item in trip.get("schedule", []):
+                    if "내용" not in sc_item:
+                        # 예전 데이터에 '장소목록'이나 '메모'가 있다면 내용으로 합쳐서 복구
+                        memo_parts = []
+                        if sc_item.get("장소목록"):
+                            memo_parts.append(f"장소: {', '.join(sc_item['장소목록'])}")
+                        if sc_item.get("메모"):
+                            memo_parts.append(sc_item["메모"])
+                        sc_item["내용"] = " / ".join(memo_parts) if memo_parts else "일정 내용 없음"
+                    sc_item.setdefault("날짜", str(date.today()))
+
             return data
     return {}
 
@@ -175,8 +198,8 @@ else:
                 for idx, f in enumerate(trip["flights"]):
                     cols = st.columns([4, 1])
                     with cols[0]:
-                        f_price = f.get('가격', f.get('총합 가격(원)', 0))
-                        st.write(f"▫️ {f['출국']} ↔ {f['귀국']} | {f_price:,}원 ({f.get('상태', '후보')})")
+                        f_price = f.get('가격', 0)
+                        st.write(f"▫️ {f.get('출국', '')} ↔ {f.get('귀국', '')} | {f_price:,}원 ({f.get('상태', '후보')})")
                     with cols[1]:
                         if st.button("삭제", key=f"del_f_{idx}"):
                             trip["flights"].pop(idx)
@@ -201,8 +224,8 @@ else:
                 for idx, h in enumerate(trip["hotels"]):
                     cols = st.columns([4, 1])
                     with cols[0]:
-                        h_price = h.get('가격', h.get('1박 가격(원)', 0))
-                        st.write(f"🏢 {h['숙소명']} ({h['위치']}) - {h_price:,}원")
+                        h_price = h.get('가격', 0)
+                        st.write(f"🏢 {h.get('숙소명', '')} ({h.get('위치', '')}) - {h_price:,}원")
                     with cols[1]:
                         if st.button("삭제", key=f"del_h_{idx}"):
                             trip["hotels"].pop(idx)
@@ -227,10 +250,10 @@ else:
             
             if trip["spots"]:
                 for idx, s in enumerate(trip["spots"]):
-                    emoji = CATEGORY_EMOJIS.get(s['분류'], "📌")
-                    s_name = s.get('이름', s.get('장소명', ''))
+                    emoji = CATEGORY_EMOJIS.get(s.get('분류', '기타'), "📌")
+                    s_name = s.get('이름', '')
                     cols = st.columns([4, 1])
-                    cols[0].write(f"{emoji} [{s['분류']}] {s_name}")
+                    cols[0].write(f"{emoji} [{s.get('분류', '기타')}] {s_name}")
                     if cols[1].button("삭제", key=f"del_s_{idx}"):
                         trip["spots"].pop(idx)
                         save_data(travels)
@@ -248,7 +271,7 @@ else:
             if trip["schedule"]:
                 for idx, sc in enumerate(trip["schedule"]):
                     cols = st.columns([4, 1])
-                    cols[0].write(f"🗓️ **{sc['날짜']}**: {sc['내용']}")
+                    cols[0].write(f"🗓️ **{sc.get('날짜', '')}**: {sc.get('내용', '')}")
                     if cols[1].button("삭제", key=f"del_sc_{idx}"):
                         trip["schedule"].pop(idx)
                         save_data(travels)
@@ -286,8 +309,8 @@ else:
 
         if trip["checklist"]:
             for idx, c in enumerate(trip["checklist"]):
-                checked = st.checkbox(c["아이템"], value=c["체크"], key=f"chk_{idx}")
-                if checked != c["체크"]:
+                checked = st.checkbox(c.get("아이템", ""), value=c.get("체크", False), key=f"chk_{idx}")
+                if checked != c.get("체크", False):
                     trip["checklist"][idx]["체크"] = checked
                     save_data(travels)
                     st.rerun()
@@ -304,8 +327,8 @@ else:
 
         if trip["videos"]:
             for idx, v in enumerate(trip["videos"]):
-                st.write(f"🎬 **{v['제목']}**")
-                try: st.video(v["URL"])
+                st.write(f"🎬 **{v.get('제목', '')}**")
+                try: st.video(v.get("URL", ""))
                 except: pass
                 if st.button("삭제", key=f"del_v_{idx}"):
                     trip["videos"].pop(idx)
