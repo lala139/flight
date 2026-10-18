@@ -548,6 +548,18 @@ def render_dashboard(trip_name: str, trip: dict, trip_id: str):
         map_url = f"https://maps.google.com/maps?q={urllib.parse.quote(query)}&t=&z={zoom}&ie=UTF8&iwloc=&output=embed"
         components.iframe(map_url, height=400)
         st.caption(caption)
+
+        if targets:
+            queries = list(dict.fromkeys(targets.values()))
+            if len(queries) == 1:
+                all_url = "https://www.google.com/maps/search/?api=1&query=" + urllib.parse.quote(queries[0], safe="")
+            else:
+                # 여러 곳은 '경유지'로 이어 붙이면 구글 지도에 전부 표시된다 (한 번에 최대 10곳)
+                stops = "/".join(urllib.parse.quote(q, safe="") for q in queries[:10])
+                all_url = f"https://www.google.com/maps/dir/{stops}"
+            st.link_button(f"🗺️ 지도 표시한 장소 {min(len(queries), 10)}곳 전부 지도에서 보기", all_url)
+            if len(queries) > 10:
+                st.caption("구글 지도는 한 번에 10곳까지만 열려요. 앞의 10곳만 표시돼요.")
     st.markdown("---")
 
 
