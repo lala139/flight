@@ -159,7 +159,7 @@ else:
     st.caption(f"📅 여행 일정: {current_trip['info']['period']}")
     
     # ------------------------------------------
-    # 단일 선택 지도용 장소 데이터 구조화 (정리된 이름 및 주소 매핑)
+    # 단일 선택 지도용 장소 데이터 구조화 (정제된 이름 및 주소 매핑)
     # ------------------------------------------
     city_query = current_trip['info'].get('city', 'Seoul')
     map_selectable_dict = {}
@@ -168,12 +168,11 @@ else:
     for h in current_trip["hotels"]:
         if h.get("show_on_map", False):
             raw_h_name = h.get("숙소명", "").strip()
-            clean_h_name = raw_h_name.split("(")[0].strip() # 괄호 뒤 설명 제거
+            clean_h_name = raw_h_name.split("(")[0].strip()
             loc = h.get("위치", "").strip()
             
             if clean_h_name:
                 label = f"🏢 {clean_h_name}"
-                # 쿼리 정확도를 위해 호텔 이름과 주소를 조합
                 query_target = f"{clean_h_name} {loc}" if loc else f"{city_query} {clean_h_name}"
                 map_selectable_dict[label] = query_target
 
@@ -231,7 +230,6 @@ else:
             
             target_query = map_selectable_dict[selected_spot_label]
             encoded_query = urllib.parse.quote(target_query)
-            # z=16으로 확대 배율을 높여 정확히 해당 장소 1개만 타겟팅
             map_url = f"https://maps.google.com/maps?q={encoded_query}&t=&z=16&ie=UTF8&iwloc=&output=embed"
             components.iframe(map_url, width=450, height=380)
             st.caption(f"📍 현재 확인 중인 위치: {target_query}")
@@ -583,14 +581,16 @@ else:
                 if sch_data["장소목록"]:
                     route_queries = []
                     for p in sch_data["장소목록"]:
+                        # 이모지 제거 및 괄호(성급 등) 부가 설명 깔끔하게 정제
                         clean_name = p.split(" ", 1)[-1].split("(")[0].strip()
+                        
                         matched_spot = next((s for s in current_trip["spots"] if s.get("장소명", "").split("(")[0].strip() == clean_name), None)
                         matched_hotel = next((h for h in current_trip["hotels"] if h.get("숙소명", "").split("(")[0].strip() == clean_name), None)
                         
                         if matched_spot and matched_spot.get("주소"):
-                            route_queries.append(f"{city_query} {matched_spot.get('주소')}")
+                            route_queries.append(f"{clean_name} {matched_spot.get('주소')}")
                         elif matched_hotel and matched_hotel.get("위치"):
-                            route_queries.append(f"{city_query} {matched_hotel.get('위치')}")
+                            route_queries.append(f"{clean_name} {matched_hotel.get('위치')}")
                         else:
                             route_queries.append(f"{city_query} {clean_name}")
 
