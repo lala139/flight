@@ -156,7 +156,7 @@ else:
     st.caption(f"📅 여행 일정: {current_trip['info']['period']}")
     
     # ------------------------------------------
-    # 지도 검색 쿼리 수집
+    # 지도 검색 쿼리 수집 (주소 기준 우선 반영으로 오류 방지)
     # ------------------------------------------
     map_queries = []
     
@@ -165,21 +165,65 @@ else:
     target_hotels = booked_hotels if booked_hotels else current_trip["hotels"]
     for h in target_hotels:
         q = h.get("위치") or h.get("숙소명")
-        if q: map_queries.append(f"🏢 {h['숙소명']} ({q})")
+        if q: map_queries.append(q)
 
-    # 2. 장소/맛집 중 '지도에 표시' 체크된 항목 수집
-    category_emojis = {"놀거리/관광지": "🎡", "맛집/카페": "🍴", "쇼핑": "🛍️", "기타": "📌"}
+    # 2. 장소/맛집 중 '지도에 표시' 체크된 항목 수집 (주소가 있으면 주소만 사용하여 정확도 높임)
     for spot in current_trip["spots"]:
         if spot.get("show_on_map", False):
-            cat_emoji = category_emojis.get(spot.get("분류"), "📌")
-            spot_q = spot.get("주소") if spot.get("주소") else spot.get("장소명")
-            if spot_q: map_queries.append(f"{cat_emoji} {spot['장소명']} ({spot_q})")
+            spot_q = spot.get("주소").strip() if spot.get("주소") else spot.get("장소명").strip()
+            if spot_q: map_queries.append(spot_q)
 
     # ==========================================
-    # 탭 구조
+    # [상시 고정 대시보드 및 전체 지도 영역]
     # ==========================================
-    tab_dash, tab_flight_hotel, tab_spot_sched, tab_expense, tab_etc = st.tabs([
-        "🎛️ 대시보드 및 지도", 
+    st.markdown("---")
+    col_dash_left, col_dash_right = st.columns([1, 1])
+    
+    with col_dash_left:
+        city_query = current_trip['info'].get('city', 'Seoul')
+        weather_info = get_weather(city_query)
+        st.metric(label=f"🌤️ {city_query} 실시간 날씨", value=weather_info)
+        
+        st.markdown("---")
+        rates = get_exchange_rates()
+        st.write("🔱 **실시간 주요 환율**")
+        for k, v in rates.items():
+            st.caption(f"• **{k}**: {v}원")
+            
+        st.markdown("---")
+        st.write("🚨 **현지 긴급 연락처 (자동 연동)**")
+        embassy_info = current_trip.get("embassy", "")
+        st.info(embassy_info)
+        
+        with st.popover("✏️ 연락처 정보 수정"):
+            with st.form("embassy_form"):
+                new_embassy = st.text_area("긴급 연락처 메모", value=embassy_info)
+                if st.form_submit_button("💾 저장"):
+                    current_trip["embassy"] = new_embassy
+                    save_data(travels)
+                    st.success("긴급 연락처가 저장되었습니다!")
+                    st.rerun()
+    
+    with col_dash_right:
+        st.subheader("🗺️ 전체 관심 장소 지도")
+        if map_queries:
+            combined_query = " OR ".join(map_queries)
+            encoded_query = urllib.parse.quote(combined_query)
+            map_url = f"https://maps.google.com/maps?q={encoded_query}&t=&z=13&ie=UTF8&iwloc=&output=embed"
+            components.iframe(map_url, width=450, height=420)
+            st.caption(f"📍 지도 반영 주소/장소 개수: {len(map_queries)}개")
+        else:
+            default_query = urllib.parse.quote(city_query)
+            map_url = f"https://maps.google.com/maps?q={default_query}&t=&z=12&ie=UTF8&iwloc=&output=embed"
+            components.iframe(map_url, width=450, height=420)
+            st.caption("💡 장소 목록에서 '지도에 표시'를 체크해 보세요!")
+
+    st.markdown("---")
+
+    # ==========================================
+    # 탭 구조 (나머지 기능들)
+    # ==========================================
+    tab_flight_hotel, tab_spot_sched, tab_expense, tab_etc = st.tabs([
         "✈️ 항공권 & 숙소", 
         "📍 장소 및 일정", 
         "💰 비용 정산", 
@@ -187,52 +231,7 @@ else:
     ])
 
     # ------------------------------------------
-    # [탭 1] 대시보드 및 지도
-    # ------------------------------------------
-    with tab_dash:
-        col_dash_left, col_dash_right = st.columns([1, 1])
-        
-        with col_dash_left:
-            city_query = current_trip['info'].get('city', 'Seoul')
-            weather_info = get_weather(city_query)
-            st.metric(label=f"🌤️ {city_query} 실시간 날씨", value=weather_info)
-            
-            st.markdown("---")
-            rates = get_exchange_rates()
-            st.write("🔱 **실시간 주요 환율**")
-            for k, v in rates.items():
-                st.caption(f"• **{k}**: {v}원")
-                
-            st.markdown("---")
-            st.write("🚨 **현지 긴급 연락처 (자동 연동)**")
-            embassy_info = current_trip.get("embassy", "")
-            st.info(embassy_info)
-            
-            with st.popover("✏️ 연락처 정보 수정"):
-                with st.form("embassy_form"):
-                    new_embassy = st.text_area("긴급 연락처 메모", value=embassy_info)
-                    if st.form_submit_button("💾 저장"):
-                        current_trip["embassy"] = new_embassy
-                        save_data(travels)
-                        st.success("긴급 연락처가 저장되었습니다!")
-                        st.rerun()
-        
-        with col_dash_right:
-            st.subheader("🗺️ 전체 관심 장소 지도")
-            if map_queries:
-                combined_query = " OR ".join(map_queries)
-                encoded_query = urllib.parse.quote(combined_query)
-                map_url = f"https://maps.google.com/maps?q={encoded_query}&t=&z=13&ie=UTF8&iwloc=&output=embed"
-                components.iframe(map_url, width=450, height=420)
-                st.caption(f"📍 지도 표시 항목: {', '.join(map_queries)}")
-            else:
-                default_query = urllib.parse.quote(city_query)
-                map_url = f"https://maps.google.com/maps?q={default_query}&t=&z=12&ie=UTF8&iwloc=&output=embed"
-                components.iframe(map_url, width=450, height=420)
-                st.caption("💡 장소 목록에서 '지도에 표시'를 체크해 보세요!")
-
-    # ------------------------------------------
-    # [탭 2] 항공권 & 숙소
+    # [탭 1] 항공권 & 숙소
     # ------------------------------------------
     with tab_flight_hotel:
         sub_tab_f, sub_tab_h = st.tabs(["✈️ 항공권 비교", "🏢 숙소 후보"])
@@ -403,7 +402,7 @@ else:
                     st.rerun()
 
     # ------------------------------------------
-    # [탭 3] 장소 및 일정 (개별 수정 / 삭제 기능 적용)
+    # [탭 2] 장소 및 일정
     # ------------------------------------------
     with tab_spot_sched:
         col_spot_left, col_spot_right = st.columns([1.1, 0.9])
@@ -451,7 +450,6 @@ else:
                         if st.button("🗑️ 삭제", key=f"spot_del_btn_{selected_travel}_{idx}"):
                             spot_delete_idx = idx
 
-                    # 관광지 개별 수정 기능
                     edit_spot_toggle = st.checkbox("✏️ 정보 수정", key=f"spot_edit_toggle_{selected_travel}_{idx}")
                     if edit_spot_toggle:
                         with st.form(key=f"spot_edit_form_{selected_travel}_{idx}"):
@@ -533,7 +531,17 @@ else:
                     st.write(f"📝 메모: {sch['메모']}")
                 
                 if sch.get("장소목록"):
-                    route_queries = [p.split(" ", 1)[-1] for p in sch["장소목록"]]
+                    # 동선 지도에서도 주소를 우선 활용할 수 있도록 정규화
+                    route_queries = []
+                    for p in sch["장소목록"]:
+                        clean_name = p.split(" ", 1)[-1]
+                        # 등록된 장소 중 해당 이름을 가진 곳의 주소가 있으면 주소 사용
+                        matched_spot = next((s for s in current_trip["spots"] if s.get("장소명") == clean_name), None)
+                        if matched_spot and matched_spot.get("주소"):
+                            route_queries.append(matched_spot.get("주소"))
+                        else:
+                            route_queries.append(clean_name)
+
                     route_combined = " -> ".join(route_queries)
                     encoded_route = urllib.parse.quote(route_combined)
                     route_map_url = f"https://maps.google.com/maps?q={encoded_route}&t=&z=13&ie=UTF8&iwloc=&output=embed"
@@ -547,7 +555,7 @@ else:
                 st.rerun()
 
     # ------------------------------------------
-    # [탭 4] 비용 정산
+    # [탭 3] 비용 정산
     # ------------------------------------------
     with tab_expense:
         st.subheader("💰 비용 정산 및 1/N 계산")
@@ -577,7 +585,7 @@ else:
                 st.rerun()
 
     # ------------------------------------------
-    # [탭 5] 준비물 & 추억
+    # [탭 4] 준비물 & 추억
     # ------------------------------------------
     with tab_etc:
         col_c, col_v, col_p = st.columns(3)
