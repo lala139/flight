@@ -1,24 +1,36 @@
+import io
 import json
-import os
 import re
-import shutil
-import tempfile
 import urllib.parse
 import uuid
-from datetime import date, time
+from datetime import date, datetime, time, timezone
 
 import pandas as pd
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
 import yfinance as yf
+from PIL import Image, ImageOps
+
+st.set_page_config(page_title="우리의 스마트 여행 플래너 ✈️", layout="wide")
+
+# ==========================================
+# Supabase 접속 정보 (Streamlit Secrets)
+# ==========================================
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"].strip().rstrip("/")
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"].strip()
+except Exception:
+    st.error("Supabase 접속 정보가 없어요. Streamlit 앱 Settings → Secrets에 "
+             "SUPABASE_URL 과 SUPABASE_KEY 를 등록해 주세요.")
+    st.stop()
+
+BUCKET = "photos"
+API_TIMEOUT = 15
 
 # ==========================================
 # 설정 / 상수
 # ==========================================
-DB_FILE = "travel_data.json"
-PHOTO_DIR = "photos"
-
 LIST_KEYS = ["flights", "hotels", "spots", "videos", "expenses", "photos", "schedule", "checklist"]
 CATEGORIES = {"놀거리/관광지": "🎡", "맛집/카페": "🍴", "쇼핑": "🛍️", "기타": "📌"}
 AIRLINES = ["제주항공", "에어부산", "에어서울", "이스타항공", "기타"]
@@ -87,7 +99,7 @@ def get_auto_emergency_contacts(location_str: str) -> str:
 
 
 # ==========================================
-# 데이터 계층
+# 데이터 계층 (Supabase)
 # ==========================================
 def new_id() -> str:
     return uuid.uuid4().hex[:10]
@@ -109,6 +121,7 @@ def normalize(data: dict) -> dict:
         trip["info"].setdefault("city", "")
         trip["info"].setdefault("period", "")
         trip.setdefault("members", [])
+        trip.setdefault("embassy", "")
         for key in LIST_KEYS:
             trip.setdefault(key, [])
         for key in ["flights", "hotels", "spots", "videos", "expenses", "checklist", "photos"]:
@@ -142,38 +155,104 @@ def normalize(data: dict) -> dict:
     return data
 
 
-def load_data() -> dict:
-    if not os.path.exists(DB_FILE):
-        return {}
-    try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            return normalize(json.load(f))
-    except (json.JSONDecodeError, OSError):
-        backup = DB_FILE + ".bak"
-        shutil.copy(DB_FILE, backup)
-        st.error(f"데이터 파일을 읽지 못해 '{backup}'로 백업했어요. 새 데이터로 시작합니다.")
-        return {}
+def _headers(content_type="application/json", extra=None) -> dict:
+    h = {"apikey": SUPABASE_KEY}
+    if SUPABASE_KEY.startswith("eyJ"):  # 예전 방식(JWT) 키일 때만 Authorization 헤더 사용
+        h["Authorization"] = f"Bearer {SUPABASE_KEY}"
+    if content_type:
+        h["Content-Type"] = content_type
+    if extra:
+        h.update(extra)
+    return h
 
 
-def save_data(data: dict) -> None:
-    """임시 파일에 쓴 뒤 교체해서, 저장 도중 꺼져도 파일이 깨지지 않게 한다."""
-    fd, tmp_path = tempfile.mkstemp(dir=".", suffix=".tmp")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-    os.replace(tmp_path, DB_FILE)
+def _check(resp, action: str) -> None:
+    if not resp.ok:
+        raise RuntimeError(f"{action} 실패 ({resp.status_code}): {resp.text[:300]}")
+
+
+def db_read():
+    url = f"{SUPABASE_URL}/rest/v1/planner_data"
+    r = requests.get(url, headers=_headers(), params={"id": "eq.1", "select": "data,version"},
+                     timeout=API_TIMEOUT)
+    _check(r, "데이터 읽기")
+    rows = r.json()
+    if rows:
+        return rows[0].get("data") or {}, int(rows[0].get("version") or 0)
+    r = requests.post(url, headers=_headers(extra={"Prefer": "resolution=ignore-duplicates"}),
+                      json={"id": 1, "data": {}}, timeout=API_TIMEOUT)
+    _check(r, "초기 데이터 생성")
+    return {}, 0
+
+
+def db_write(data: dict, version: int) -> bool:
+    """version이 그대로일 때만 저장 (그 사이 다른 사람이 저장했다면 False)."""
+    url = f"{SUPABASE_URL}/rest/v1/planner_data"
+    r = requests.patch(
+        url,
+        headers=_headers(extra={"Prefer": "return=representation"}),
+        params={"id": "eq.1", "version": f"eq.{version}"},
+        json={"data": data, "version": version + 1, "updated_at": datetime.now(timezone.utc).isoformat()},
+        timeout=API_TIMEOUT,
+    )
+    _check(r, "데이터 저장")
+    return len(r.json()) > 0
+
+
+def load_data():
+    data, ver = {}, 0
+    for _ in range(3):
+        raw, ver = db_read()
+        before = json.dumps(raw, sort_keys=True, ensure_ascii=False)
+        data = normalize(raw)
+        if json.dumps(data, sort_keys=True, ensure_ascii=False) == before:
+            return data, ver
+        if db_write(data, ver):  # 보정한 결과(새 id 등)를 바로 저장해 둔다
+            return data, ver + 1
+    return data, ver
+
+
+def mutate(trip_name, fn) -> bool:
+    """최신 데이터를 읽어 수정 후 저장. 동시에 누가 저장했으면 자동으로 다시 시도.
+    trip_name이 None이면 fn(전체 데이터), 아니면 fn(해당 여행)."""
+    for _ in range(5):
+        data, ver = load_data()
+        if trip_name is None:
+            fn(data)
+        else:
+            trip = data.get(trip_name)
+            if trip is None:
+                return False
+            fn(trip)
+        if db_write(data, ver):
+            return True
+    st.error("다른 사람이 동시에 수정 중이라 저장하지 못했어요. 잠시 후 다시 시도해 주세요.")
+    return False
 
 
 def find(items: list, item_id: str):
     return next((i for i in items if i.get("id") == item_id), None)
 
 
-def mutate(trip_name: str, fn) -> None:
-    """디스크에서 최신 데이터를 읽어 수정 후 저장 (콜백 전용)."""
-    data = load_data()
-    trip = data.get(trip_name)
-    if trip is not None:
-        fn(trip)
-        save_data(data)
+def append_item(trip_name, list_key, record) -> bool:
+    return mutate(trip_name, lambda t: t[list_key].append(record))
+
+
+def set_field(trip_name, key, value) -> bool:
+    return mutate(trip_name, lambda t: t.__setitem__(key, value))
+
+
+def edit_item(trip_name, list_key, item_id, updates, label_fn=None) -> bool:
+    def apply(t):
+        item = find(t[list_key], item_id)
+        if item is None:
+            return
+        old = label_fn(item) if label_fn else None
+        item.update(updates)
+        if label_fn:
+            rename_place_in_schedule(t, old, label_fn(item))
+
+    return mutate(trip_name, apply)
 
 
 def remove_place_from_schedule(trip: dict, label: str) -> None:
@@ -186,6 +265,48 @@ def rename_place_in_schedule(trip: dict, old: str, new: str) -> None:
         return
     for sch in trip["schedule"]:
         sch["장소목록"] = [new if p == old else p for p in sch["장소목록"]]
+
+
+# ---------- 사진 저장소 (Supabase Storage) ----------
+def storage_upload(path: str, content: bytes, mime: str) -> None:
+    r = requests.post(f"{SUPABASE_URL}/storage/v1/object/{BUCKET}/{path}",
+                      headers=_headers(content_type=mime), data=content, timeout=60)
+    _check(r, "사진 업로드")
+
+
+def storage_delete(paths) -> None:
+    paths = list(paths)
+    if not paths:
+        return
+    try:
+        requests.delete(f"{SUPABASE_URL}/storage/v1/object/{BUCKET}",
+                        headers=_headers(), json={"prefixes": paths}, timeout=API_TIMEOUT)
+    except requests.RequestException:
+        pass
+
+
+@st.cache_data(ttl=3000, show_spinner=False)
+def photo_url(path: str):
+    try:
+        r = requests.post(f"{SUPABASE_URL}/storage/v1/object/sign/{BUCKET}/{path}",
+                          headers=_headers(), json={"expiresIn": 3600}, timeout=API_TIMEOUT)
+        if r.ok:
+            signed = r.json().get("signedURL", "")
+            if signed.startswith("/storage/v1"):
+                return f"{SUPABASE_URL}{signed}"
+            return f"{SUPABASE_URL}/storage/v1{signed}"
+    except requests.RequestException:
+        pass
+    return None
+
+
+def prepare_image(file) -> bytes:
+    """회전 보정 + 긴 변 1600px로 줄여 JPEG로 저장 (저장 용량 절약)."""
+    img = ImageOps.exif_transpose(Image.open(file)).convert("RGB")
+    img.thumbnail((1600, 1600))
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=85)
+    return buf.getvalue()
 
 
 # ---------- 위젯 콜백 ----------
@@ -210,10 +331,7 @@ def cb_delete(trip_name, list_key, item_id):
         elif list_key == "hotels":
             remove_place_from_schedule(trip, hotel_label(item))
         elif list_key == "photos":
-            try:
-                os.remove(item["path"])
-            except OSError:
-                pass
+            storage_delete([item.get("path", "")])
         trip[list_key] = [i for i in trip[list_key] if i.get("id") != item_id]
 
     mutate(trip_name, apply)
@@ -222,14 +340,11 @@ def cb_delete(trip_name, list_key, item_id):
 def cb_reset(trip_name, list_key):
     def apply(trip):
         if list_key == "photos":
-            for p in trip["photos"]:
-                try:
-                    os.remove(p["path"])
-                except OSError:
-                    pass
+            storage_delete([p.get("path", "") for p in trip["photos"]])
         if list_key == "spots":
+            labels = {spot_label(s) for s in trip["spots"]}
             for sch in trip["schedule"]:
-                sch["장소목록"] = [p for p in sch["장소목록"] if not any(p == spot_label(s) for s in trip["spots"])]
+                sch["장소목록"] = [p for p in sch["장소목록"] if p not in labels]
         trip[list_key] = []
 
     mutate(trip_name, apply)
@@ -291,10 +406,13 @@ def get_weather(city_name: str) -> str:
 
 
 # ==========================================
-# 페이지 / 사이드바
+# 데이터 불러오기 / 사이드바
 # ==========================================
-st.set_page_config(page_title="우리의 스마트 여행 플래너 ✈️", layout="wide")
-travels = load_data()
+try:
+    travels, _db_version = load_data()
+except Exception as e:  # 접속 정보 오류, 테이블/컬럼 누락 등
+    st.error(f"데이터베이스에 연결하지 못했어요.\n\n{e}")
+    st.stop()
 travel_names = list(travels.keys())
 
 # 새 여행 생성 직후 자동으로 그 여행을 선택 (위젯이 만들어지기 전에 상태를 세팅해야 함)
@@ -321,11 +439,16 @@ if mode == MODE_OPTIONS[1]:
                 st.sidebar.error("이미 존재하는 여행 이름입니다.")
             else:
                 target_loc = new_city.strip() or new_name
-                travels[new_name] = normalize({new_name: {
+                record = {
                     "info": {"name": new_name, "city": target_loc, "period": new_date.strip()},
                     "embassy": get_auto_emergency_contacts(target_loc),
-                }})[new_name]
-                save_data(travels)
+                }
+
+                def add_trip(data, _name=new_name, _record=record):
+                    if _name not in data:
+                        data[_name] = normalize({_name: _record})[_name]
+
+                mutate(None, add_trip)
                 st.session_state["_pending_select"] = new_name
                 st.rerun()
 else:
@@ -334,14 +457,32 @@ else:
         with st.sidebar.expander("⚠️ 이 여행 삭제"):
             confirm_del = st.checkbox("정말 삭제합니다", key=f"confirm_del_{selected_travel}")
             if st.button("여행 삭제", disabled=not confirm_del):
-                trip_id = travels[selected_travel]["info"]["id"]
-                shutil.rmtree(os.path.join(PHOTO_DIR, trip_id), ignore_errors=True)
-                del travels[selected_travel]
-                save_data(travels)
+                storage_delete([p.get("path", "") for p in travels[selected_travel]["photos"]])
+                mutate(None, lambda d, _n=selected_travel: d.pop(_n, None))
                 st.session_state.pop("selected_travel", None)
                 st.rerun()
     else:
         st.sidebar.warning("등록된 여행이 없습니다. 새 여행을 먼저 만들어주세요!")
+
+with st.sidebar.expander("📥 기존 데이터 가져오기 (travel_data.json)"):
+    st.caption("예전에 쓰던 travel_data.json이 있다면 올려서 옮길 수 있어요. 이미 있는 여행 이름은 건너뛰고, 사진은 옮겨지지 않아요.")
+    uploaded_json = st.file_uploader("travel_data.json 선택", type=["json"], key="import_json")
+    if uploaded_json is not None and st.button("가져오기"):
+        try:
+            imported = json.load(uploaded_json)
+            if not isinstance(imported, dict):
+                raise ValueError("올바른 형식이 아니에요.")
+        except (ValueError, UnicodeDecodeError) as e:
+            st.error(f"파일을 읽지 못했어요: {e}")
+        else:
+            def import_trips(data, _imp=imported):
+                for n, t in _imp.items():
+                    if isinstance(t, dict) and n not in data:
+                        t["photos"] = []
+                        data[n] = t
+
+            mutate(None, import_trips)
+            st.rerun()
 
 
 # ==========================================
@@ -386,12 +527,10 @@ def render_dashboard(trip_name: str, trip: dict, trip_id: str):
             with st.form(f"embassy_form_{trip_id}"):
                 new_embassy = st.text_area("긴급 연락처 메모", value=trip.get("embassy", ""))
                 if st.form_submit_button("💾 저장"):
-                    trip["embassy"] = new_embassy
-                    save_data(travels)
+                    set_field(trip_name, "embassy", new_embassy)
                     st.rerun()
             if st.button("🔄 도시 기준 자동값으로 재설정", key=f"embassy_reset_{trip_id}"):
-                trip["embassy"] = get_auto_emergency_contacts(city_query)
-                save_data(travels)
+                set_field(trip_name, "embassy", get_auto_emergency_contacts(city_query))
                 st.rerun()
 
     with col_right:
@@ -436,7 +575,7 @@ def render_flights(trip_name: str, trip: dict, trip_id: str):
         is_discount = st.checkbox("🏷️ 특가 / 할인가 적용 항공권인가요?", key=f"f_disc_{trip_id}")
 
         if st.form_submit_button("➕ 항공권 추가"):
-            trip["flights"].append({
+            append_item(trip_name, "flights", {
                 "id": new_id(),
                 "출국 항공사": dep_airline,
                 "출국 시간": f"{dep_t:%H:%M} -> {arr_t:%H:%M}",
@@ -446,7 +585,6 @@ def render_flights(trip_name: str, trip: dict, trip_id: str):
                 "할인여부": "할인가" if is_discount else "정가",
                 "상태": "후보",
             })
-            save_data(travels)
             st.rerun()
 
     flights = trip["flights"]
@@ -492,12 +630,11 @@ def render_hotels(trip_name: str, trip: dict, trip_id: str):
             if not h_name.strip():
                 st.error("숙소 이름을 입력해 주세요.")
             else:
-                trip["hotels"].append({
+                append_item(trip_name, "hotels", {
                     "id": new_id(), "숙소명": h_name.strip(), "위치": h_loc.strip(),
                     "1박 가격(원)": h_price, "할인여부": "할인가" if is_disc else "정가",
                     "링크": normalize_url(h_link), "메모": h_note, "상태": "후보", "show_on_map": False,
                 })
-                save_data(travels)
                 st.rerun()
 
     hotels = trip["hotels"]
@@ -551,14 +688,11 @@ def render_hotels(trip_name: str, trip: dict, trip_id: str):
                     if not e_name.strip():
                         st.error("숙소 이름은 비워둘 수 없어요.")
                     else:
-                        old_label = hotel_label(h)
-                        h.update({
+                        edit_item(trip_name, "hotels", hid, {
                             "숙소명": e_name.strip(), "위치": e_loc.strip(), "1박 가격(원)": e_price,
                             "할인여부": "할인가" if e_disc else "정가",
                             "링크": normalize_url(e_link), "메모": e_note,
-                        })
-                        rename_place_in_schedule(trip, old_label, hotel_label(h))
-                        save_data(travels)
+                        }, label_fn=hotel_label)
                         st.rerun()
         st.write("---")
     reset_button(trip_name, trip_id, "hotels", "숙소")
@@ -578,11 +712,10 @@ def render_spots(trip_name: str, trip: dict, trip_id: str):
             if not s_name.strip():
                 st.error("장소 이름을 입력해 주세요.")
             else:
-                trip["spots"].append({
+                append_item(trip_name, "spots", {
                     "id": new_id(), "장소명": s_name.strip(), "주소": s_addr.strip(),
                     "분류": s_cat, "메모": s_note, "show_on_map": False,
                 })
-                save_data(travels)
                 st.rerun()
 
     if not trip["spots"]:
@@ -611,10 +744,9 @@ def render_spots(trip_name: str, trip: dict, trip_id: str):
                     if not e_name.strip():
                         st.error("장소 이름은 비워둘 수 없어요.")
                     else:
-                        old_label = spot_label(s)
-                        s.update({"장소명": e_name.strip(), "주소": e_addr.strip(), "분류": e_cat, "메모": e_note})
-                        rename_place_in_schedule(trip, old_label, spot_label(s))
-                        save_data(travels)
+                        edit_item(trip_name, "spots", sid, {
+                            "장소명": e_name.strip(), "주소": e_addr.strip(), "분류": e_cat, "메모": e_note,
+                        }, label_fn=spot_label)
                         st.rerun()
         st.write("---")
     reset_button(trip_name, trip_id, "spots", "장소")
@@ -631,17 +763,20 @@ def render_schedule(trip_name: str, trip: dict, trip_id: str):
         memo = st.text_area("상세 일정 내용 및 메모")
         if st.form_submit_button("➕ 일정 추가"):
             d = sch_date.strftime("%Y-%m-%d")
-            entry = next((x for x in trip["schedule"] if x["날짜"] == d), None)
-            if entry is None:
-                entry = {"id": new_id(), "날짜": d, "장소목록": [], "메모": ""}
-                trip["schedule"].append(entry)
-                trip["schedule"].sort(key=lambda x: x["날짜"])
-            for p in picked:
-                if p not in entry["장소목록"]:
-                    entry["장소목록"].append(p)
-            if memo.strip():
-                entry["메모"] = (entry["메모"] + "\n" + memo.strip()).strip()
-            save_data(travels)
+
+            def apply(t, _d=d, _picked=list(picked), _memo=memo.strip()):
+                entry = next((x for x in t["schedule"] if x["날짜"] == _d), None)
+                if entry is None:
+                    entry = {"id": new_id(), "날짜": _d, "장소목록": [], "메모": ""}
+                    t["schedule"].append(entry)
+                    t["schedule"].sort(key=lambda x: x["날짜"])
+                for p in _picked:
+                    if p not in entry["장소목록"]:
+                        entry["장소목록"].append(p)
+                if _memo:
+                    entry["메모"] = (entry["메모"] + "\n" + _memo).strip()
+
+            mutate(trip_name, apply)
             st.rerun()
     return available
 
@@ -716,8 +851,8 @@ def render_expenses(trip_name: str, trip: dict, trip_id: str):
         with st.form(f"members_form_{trip_id}"):
             raw = st.text_input("참여자 이름 (쉼표로 구분)", value=", ".join(members), placeholder="철수, 영희, 민수")
             if st.form_submit_button("💾 저장"):
-                trip["members"] = list(dict.fromkeys(m.strip() for m in raw.split(",") if m.strip()))
-                save_data(travels)
+                new_members = list(dict.fromkeys(m.strip() for m in raw.split(",") if m.strip()))
+                set_field(trip_name, "members", new_members)
                 st.rerun()
 
     participants = list(dict.fromkeys(members + [e["결제자"] for e in expenses if e.get("결제자")]))
@@ -736,9 +871,8 @@ def render_expenses(trip_name: str, trip: dict, trip_id: str):
             elif not targets:
                 st.error("부담할 사람을 한 명 이상 선택해 주세요.")
             else:
-                expenses.append({"id": new_id(), "결제자": payer, "항목": item.strip(),
-                                 "금액(원)": amount, "대상": targets})
-                save_data(travels)
+                append_item(trip_name, "expenses", {"id": new_id(), "결제자": payer, "항목": item.strip(),
+                                                    "금액(원)": amount, "대상": targets})
                 st.rerun()
 
     if not expenses:
@@ -786,8 +920,7 @@ def render_checklist(trip_name: str, trip: dict, trip_id: str):
                 st.error("준비물 이름을 입력해 주세요.")
             else:
                 label = f"{name.strip()} ({assignee.strip()})" if assignee.strip() else name.strip()
-                trip["checklist"].append({"id": new_id(), "아이템": label, "체크": False})
-                save_data(travels)
+                append_item(trip_name, "checklist", {"id": new_id(), "아이템": label, "체크": False})
                 st.rerun()
 
     for item in trip["checklist"]:
@@ -811,8 +944,7 @@ def render_videos(trip_name: str, trip: dict, trip_id: str):
             if not url.strip():
                 st.error("URL을 입력해 주세요.")
             else:
-                trip["videos"].append({"id": new_id(), "설명": title.strip(), "URL": normalize_url(url)})
-                save_data(travels)
+                append_item(trip_name, "videos", {"id": new_id(), "설명": title.strip(), "URL": normalize_url(url)})
                 st.rerun()
 
     for v in trip["videos"]:
@@ -827,28 +959,40 @@ def render_videos(trip_name: str, trip: dict, trip_id: str):
 
 def render_photos(trip_name: str, trip: dict, trip_id: str):
     st.subheader("📸 추억 사진첩")
-    st.caption("여행 중 찍은 소중한 순간들을 사진으로 남겨보세요! (업로드한 사진은 저장돼요)")
+    st.caption("여행 중 찍은 소중한 순간들을 사진으로 남겨보세요! (사진은 자동으로 줄여서 저장돼요)")
 
     with st.form(f"photo_form_{trip_id}", clear_on_submit=True):
         files = st.file_uploader("사진 올리기", accept_multiple_files=True, type=["png", "jpg", "jpeg"])
         if st.form_submit_button("📤 업로드") and files:
-            folder = os.path.join(PHOTO_DIR, trip_id)
-            os.makedirs(folder, exist_ok=True)
-            for f in files:
-                pid = new_id()
-                ext = os.path.splitext(f.name)[1].lower() or ".jpg"
-                path = os.path.join(folder, f"{pid}{ext}")
-                with open(path, "wb") as out:
-                    out.write(f.getbuffer())
-                trip["photos"].append({"id": pid, "path": path, "name": f.name})
-            save_data(travels)
+            records, failed = [], []
+            with st.spinner("사진을 올리는 중..."):
+                for f in files:
+                    try:
+                        content = prepare_image(f)
+                        pid = new_id()
+                        path = f"{trip_id}/{pid}.jpg"
+                        storage_upload(path, content, "image/jpeg")
+                        records.append({"id": pid, "path": path, "name": f.name})
+                    except Exception as e:
+                        failed.append(f"{f.name}: {e}")
+            if records:
+                mutate(trip_name, lambda t, _r=records: t["photos"].extend(_r))
+            if failed:
+                st.session_state["_photo_errors"] = failed
             st.rerun()
 
-    photos = [p for p in trip["photos"] if os.path.exists(p["path"])]
+    for msg in st.session_state.pop("_photo_errors", []):
+        st.error(f"업로드 실패 — {msg}")
+
+    photos = trip["photos"]
     cols = st.columns(3)
     for i, p in enumerate(photos):
         with cols[i % 3]:
-            st.image(p["path"], caption=p["name"], use_container_width=True)
+            url = photo_url(p["path"])
+            if url:
+                st.image(url, caption=p.get("name", ""), use_container_width=True)
+            else:
+                st.caption(f"⚠️ {p.get('name', '')} 불러오기 실패")
             st.button("🗑️ 삭제", key=f"photo_del_{p['id']}", on_click=cb_delete, args=(trip_name, "photos", p["id"]))
     if photos:
         reset_button(trip_name, trip_id, "photos", "사진")
@@ -865,8 +1009,9 @@ else:
     trip_id = current_trip["info"]["id"]
 
     if not current_trip.get("embassy"):
-        current_trip["embassy"] = get_auto_emergency_contacts(current_trip["info"].get("city") or selected_travel)
-        save_data(travels)
+        auto_contacts = get_auto_emergency_contacts(current_trip["info"].get("city") or selected_travel)
+        set_field(selected_travel, "embassy", auto_contacts)
+        current_trip["embassy"] = auto_contacts
 
     st.title(f"📍 {current_trip['info']['name']}")
     st.caption(f"📅 여행 일정: {current_trip['info'].get('period', '')}")
