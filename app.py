@@ -21,6 +21,45 @@ def save_data(data):
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
+# --- 국가/도시별 자동 긴급 연락처 데이터베이스 ---
+def get_auto_emergency_contacts(location_str):
+    loc = location_str.lower()
+    
+    # 1. 일본
+    if any(k in loc for k in ["tokyo", "osaka", "fukuoka", "sapporo", "kyoto", "okinawa", "japan", "도쿄", "오사카", "후쿠오카", "삿포로", "교토", "오키나와", "일본"]):
+        return (
+            "• 경찰: 110 / 소방·구급: 119\n"
+            "• 주일 한국대사관: +81-3-3452-7401\n"
+            "• 영사콜센터: +82-2-3210-0404"
+        )
+    # 2. 미국 / 캐나다
+    elif any(k in loc for k in ["new york", "los angeles", "la", "hawaii", "guam", "usa", "canada", "뉴욕", "로스앤젤레스", "하와이", "괌", "미국", "캐나다"]):
+        return (
+            "• 긴급 통합 신고(경찰/구급): 911\n"
+            "• 주미 한국대사관: +1-202-939-5600\n"
+            "• 영사콜센터: +82-2-3210-0404"
+        )
+    # 3. 유럽 (통합 112)
+    elif any(k in loc for k in ["paris", "london", "rome", "barcelona", "vienna", "prague", "france", "uk", "italy", "spain", "파리", "런던", "로마", "바르셀로나", "유럽", "프랑스", "영국", "이탈리아", "스페인"]):
+        return (
+            "• 유럽 통합 긴급신고: 112\n"
+            "• 현지 한국대사관 비상연락처 확인 필요\n"
+            "• 영사콜센터: +82-2-3210-0404"
+        )
+    # 4. 베트남
+    elif any(k in loc for k in ["danang", "hanoi", "ho chi minh", "nhatrang", "vietnam", "다낭", "하노이", "호치민", "나트랑", "베트남"]):
+        return (
+            "• 경찰: 113 / 구급: 115\n"
+            "• 주베트남 한국대사관: +84-24-3831-5111\n"
+            "• 영사콜센터: +82-2-3210-0404"
+        )
+    # 5. 기타 기본값
+    else:
+        return (
+            "• 현지 경찰/구급차 번호 확인 필요\n"
+            "• 외교부 영사콜센터: +82-2-3210-0404 (24시간 가능)"
+        )
+
 # --- 실시간 환율 및 날씨 함수 ---
 @st.cache_data(ttl=3600)
 def get_exchange_rates():
@@ -68,7 +107,7 @@ mode = st.sidebar.radio("모드 선택", ["📂 기존 여행 선택하기", "�
 if mode == "➕ 새 여행 만들기":
     with st.sidebar.form("new_travel_form"):
         new_name = st.text_input("여행 이름 (예: 도쿄 여행, 뉴욕 여행)")
-        new_city = st.text_input("영문 도시명 (날씨용, 예: Tokyo, New York, Osaka)")
+        new_city = st.text_input("영문 도시명 (날씨/긴급연락처용, 예: Tokyo, New York, Osaka)")
         new_date = st.text_input("여행 기간 (예: 2026.07.10 ~ 07.15)")
         create_btn = st.form_submit_button("여행 폴더 생성")
         
@@ -76,8 +115,12 @@ if mode == "➕ 새 여행 만들기":
             if new_name in travels:
                 st.sidebar.error("이미 존재하는 여행 이름입니다.")
             else:
+                target_loc = new_city if new_city else new_name
+                auto_embassy = get_auto_emergency_contacts(target_loc)
+                
                 travels[new_name] = {
-                    "info": {"name": new_name, "city": new_city if new_city else new_name, "period": new_date},
+                    "info": {"name": new_name, "city": target_loc, "period": new_date},
+                    "embassy": auto_embassy,
                     "flights": [], "hotels": [], "spots": [], "videos": [],
                     "expenses": [], "photos": [], "schedule": [], "checklist": []
                 }
@@ -103,6 +146,12 @@ else:
     for key in ["flights", "hotels", "spots", "videos", "expenses", "photos", "schedule", "checklist"]:
         current_trip.setdefault(key, [])
 
+    # 긴급 연락처 데이터 자동 할당 (구버전 데이터 대응)
+    if "embassy" not in current_trip or not current_trip["embassy"]:
+        city_query = current_trip['info'].get('city', 'Seoul')
+        current_trip["embassy"] = get_auto_emergency_contacts(city_query)
+        save_data(travels)
+
     st.title(f"📍 {current_trip['info']['name']}")
     st.caption(f"📅 여행 일정: {current_trip['info']['period']}")
     
@@ -111,7 +160,7 @@ else:
     # ------------------------------------------
     map_queries = []
     
-    # 1. 숙소 지도 수집 (예약 완료가 하나라도 있으면 그 숙소만, 없으면 후보지 전체)
+    # 1. 숙소 지도 수집
     booked_hotels = [h for h in current_trip["hotels"] if h.get("상태") == "예약완료"]
     if booked_hotels:
         for bh in booked_hotels:
@@ -130,7 +179,7 @@ else:
             q = spot.get("장소명")
             if q: map_queries.append(f"{cat_emoji} {q}")
 
-    # --- 대시보드: 좌측(날씨, 환율, 현지 긴급 연락처), 우측(정사각형 구글 지도) ---
+    # --- 대시보드: 좌측(날씨, 환율, 자동연동 긴급 연락처), 우측(정사각형 구글 지도) ---
     col_dash_left, col_dash_right = st.columns([1, 1])
     
     with col_dash_left:
@@ -145,10 +194,10 @@ else:
             st.caption(f"• **{k}**: {v}원")
             
         st.markdown("---")
-        st.write("🚨 **현지 긴급 연락처**")
+        st.write("🚨 **현지 긴급 연락처 (자동 연동)**")
         
-        # 저장된 긴급 연락처 불러오기
-        embassy_info = current_trip.get("embassy", "• 대사관/영사관: \n• 현지 경찰/구급차: 110 / 119\n• 영사콜센터: +82-2-3210-0404")
+        # 자동 연결된 연락처 불러오기
+        embassy_info = current_trip.get("embassy", "")
         st.info(embassy_info)
         
         # 수정 기능 (팝오버 방식)
@@ -476,12 +525,10 @@ else:
     # 1) 불러올 수 있는 후보 목록 조합 (예약 완료 숙소 + 여행지/맛집)
     available_places = []
     
-    # 예약 확정 숙소만 띄우기
     for h in current_trip["hotels"]:
         if h.get("상태") == "예약완료":
             available_places.append(f"🏢 {h['숙소명']}")
             
-    # 여행지/맛집 불러오기
     for s in current_trip["spots"]:
         cat_e = category_emojis.get(s.get("분류"), "📌")
         available_places.append(f"{cat_e} {s['장소명']}")
@@ -493,7 +540,6 @@ else:
         with st.form("schedule_form"):
             sch_date = st.date_input("일정 날짜 선택", value=date.today())
             
-            # 등록해둔 장소에서 불러오기 (다중 선택 드롭다운)
             selected_from_list = st.multiselect(
                 "📥 입력했던 여행지/숙소 불러오기 (선택 시 내용에 추가됨)", 
                 options=available_places
