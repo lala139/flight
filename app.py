@@ -190,7 +190,7 @@ else:
                 save_data(travels)
                 st.rerun()
 
-    # [2] 숙소 후보
+    # [2] 숙소 후보 (수정 및 개별 삭제 기능 포함)
     with st.expander("🏨 숙소 후보"):
         with st.form("hotel_form"):
             h_name = st.text_input("숙소 이름")
@@ -221,6 +221,9 @@ else:
             df_h_sorted = df_h_temp.sort_values(by="1박 가격(원)", ascending=True).reset_index(drop=True)
             cheapest_hotel = df_h_sorted.iloc[0] if not df_h_sorted.empty else None
 
+            # 삭제 대상 인덱스를 기록할 변수
+            delete_idx = None
+
             for idx, hotel in enumerate(current_trip["hotels"]):
                 h_price_fmt = f"{int(hotel['1박 가격(원)']):,}원"
                 is_cheapest_h = (cheapest_hotel is not None and 
@@ -229,7 +232,7 @@ else:
                 url = hotel.get("링크", "").strip()
                 h_discount_tag = "🔥 [할인가]" if hotel.get("할인여부") == "할인가" else "🏷️ [정가]"
 
-                col_info, col_link, col_chk = st.columns([3, 1, 1])
+                col_info, col_link, col_chk, col_edit, col_del = st.columns([3.5, 1.2, 1, 0.8, 0.8])
                 
                 with col_info:
                     if hotel.get("상태") == "예약완료":
@@ -243,7 +246,7 @@ else:
                     if url:
                         if not (url.startswith("http://") or url.startswith("https://")):
                             url = "https://" + url
-                        st.link_button("🔗 숙소 바로가기", url)
+                        st.link_button("🔗 바로가기", url)
                     else:
                         st.caption("링크 없음")
 
@@ -255,6 +258,45 @@ else:
                         save_data(travels)
                         st.rerun()
 
+                with col_edit:
+                    edit_toggle = st.checkbox("✏️ 수정", key=f"h_edit_toggle_{selected_travel}_{idx}")
+
+                with col_del:
+                    if st.button("🗑️", key=f"h_del_btn_{selected_travel}_{idx}", help="이 숙소 삭제"):
+                        delete_idx = idx
+
+                # 수정 모드가 켜진 경우 펼쳐지는 수정용 인라인 폼
+                if edit_toggle:
+                    with st.form(key=f"h_edit_form_{selected_travel}_{idx}"):
+                        st.markdown(f"⚙️ **'{hotel['숙소명']}' 수정하기**")
+                        e_name = st.text_input("숙소 이름", value=hotel.get("숙소명", ""))
+                        e_loc = st.text_input("위치 / 지역", value=hotel.get("위치", ""))
+                        e_price = st.number_input("1박 가격 (원)", min_value=0, step=5000, value=int(hotel.get("1박 가격(원)", 100000)))
+                        e_is_discount = st.checkbox("🏷️ 특가 / 할인가 적용", value=(hotel.get("할인여부") == "할인가"))
+                        e_link = st.text_input("숙소 링크 (URL)", value=hotel.get("링크", ""))
+                        e_note = st.text_area("특징 및 메모", value=hotel.get("메모", ""))
+                        
+                        if st.form_submit_button("💾 수정사항 저장"):
+                            current_trip["hotels"][idx] = {
+                                "숙소명": e_name,
+                                "위치": e_loc,
+                                "1박 가격(원)": e_price,
+                                "할인여부": "할인가" if e_is_discount else "정가",
+                                "링크": e_link,
+                                "메모": e_note,
+                                "상태": hotel.get("상태", "후보")
+                            }
+                            save_data(travels)
+                            st.success("수정되었습니다!")
+                            st.rerun()
+
+            # 개별 삭제 처리
+            if delete_idx is not None:
+                del current_trip["hotels"][delete_idx]
+                save_data(travels)
+                st.rerun()
+
+            st.write("---")
             if st.button("🗑️ 숙소 전체 초기화"):
                 current_trip["hotels"] = []
                 save_data(travels)
@@ -338,7 +380,7 @@ else:
     # 2. 하단 상시 고정 영역 (일자별 일정 & 준비물)
     # ------------------------------------------
     st.write("---")
-    st.header("📌 기본 일정 및 준비물 (상시 고정)")
+    st.header("📌 기본 일정 및 준비물")
 
     col_left, col_right = st.columns(2)
 
