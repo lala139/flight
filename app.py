@@ -21,6 +21,9 @@ def save_data(data):
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
+# --- 카테고리 이모지 전역 정의 ---
+category_emojis = {"놀거리/관광지": "🎡", "맛집/카페": "🍴", "쇼핑": "🛍️", "기타": "📌"}
+
 # --- 국가/도시별 자동 긴급 연락처 데이터베이스 ---
 def get_auto_emergency_contacts(location_str):
     loc = location_str.lower()
@@ -156,7 +159,7 @@ else:
     st.caption(f"📅 여행 일정: {current_trip['info']['period']}")
     
     # ------------------------------------------
-    # 지도 검색 쿼리 수집 (주소 기준 우선 반영으로 오류 방지)
+    # 지도 검색 쿼리 수집 (주소 기준 우선 반영)
     # ------------------------------------------
     map_queries = []
     
@@ -167,7 +170,7 @@ else:
         q = h.get("위치") or h.get("숙소명")
         if q: map_queries.append(q)
 
-    # 2. 장소/맛집 중 '지도에 표시' 체크된 항목 수집 (주소가 있으면 주소만 사용하여 정확도 높임)
+    # 2. 장소/맛집 중 '지도에 표시' 체크된 항목 수집 (주소가 있으면 주소만 사용)
     for spot in current_trip["spots"]:
         if spot.get("show_on_map", False):
             spot_q = spot.get("주소").strip() if spot.get("주소") else spot.get("장소명").strip()
@@ -531,11 +534,9 @@ else:
                     st.write(f"📝 메모: {sch['메모']}")
                 
                 if sch.get("장소목록"):
-                    # 동선 지도에서도 주소를 우선 활용할 수 있도록 정규화
                     route_queries = []
                     for p in sch["장소목록"]:
                         clean_name = p.split(" ", 1)[-1]
-                        # 등록된 장소 중 해당 이름을 가진 곳의 주소가 있으면 주소 사용
                         matched_spot = next((s for s in current_trip["spots"] if s.get("장소명") == clean_name), None)
                         if matched_spot and matched_spot.get("주소"):
                             route_queries.append(matched_spot.get("주소"))
