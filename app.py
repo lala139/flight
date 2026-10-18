@@ -133,7 +133,7 @@ else:
     # --- 대시보드: 좌측(날씨 & 환율), 우측(정사각형 구글 지도) ---
     col_dash_left, col_dash_right = st.columns([1, 1])
     
-    with col_dash_left:
+   with col_dash_left:
         city_query = current_trip['info'].get('city', 'Seoul')
         weather_info = get_weather(city_query)
         st.metric(label=f"🌤️ {city_query} 실시간 날씨", value=weather_info)
@@ -143,7 +143,23 @@ else:
         st.write("🔱 **실시간 주요 환율**")
         for k, v in rates.items():
             st.caption(f"• **{k}**: {v}원")
-    
+            
+        st.markdown("---")
+        st.write("🚨 **현지 긴급 연락처**")
+        
+        # 저장된 긴급 연락처 불러오기
+        embassy_info = current_trip.get("embassy", "• 대사관/영사관: \n• 현지 경찰/구급차: 110 / 119\n• 영사콜센터: +82-2-3210-0404")
+        st.info(embassy_info)
+        
+        # 수정 기능 (팝오버 방식)
+        with st.popover("✏️ 연락처 정보 수정"):
+            with st.form("embassy_form"):
+                new_embassy = st.text_area("긴급 연락처 메모", value=embassy_info)
+                if st.form_submit_button("💾 저장"):
+                    current_trip["embassy"] = new_embassy
+                    save_data(travels)
+                    st.success("긴급 연락처가 저장되었습니다!")
+                    st.rerun()
     with col_dash_right:
         st.subheader("🗺️ 전체 관심 장소 지도")
         if map_queries:
