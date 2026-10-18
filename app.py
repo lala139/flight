@@ -1003,7 +1003,7 @@ def render_photos(trip_name: str, trip: dict, trip_id: str):
 # ==========================================
 if not selected_travel:
     st.title("🛫 환영합니다! 친구들과 함께 만드는 여행 플래너입니다.")
-    st.info("👈 왼쪽 사이드바에서 **'새 여행 만들기'**를 통해 여행을 시작해 보세요!")
+    st.info("👈 왼쪽 사이드바에서 **새 여행 만들기**를 통해 여행을 시작해 보세요!")
 else:
     current_trip = travels[selected_travel]
     trip_id = current_trip["info"]["id"]
