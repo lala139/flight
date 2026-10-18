@@ -33,7 +33,20 @@ API_TIMEOUT = 15
 # ==========================================
 LIST_KEYS = ["flights", "hotels", "spots", "videos", "expenses", "photos", "schedule", "checklist"]
 CATEGORIES = {"놀거리/관광지": "🎡", "맛집/카페": "🍴", "쇼핑": "🛍️", "기타": "📌"}
-AIRLINES = ["제주항공", "에어부산", "에어서울", "이스타항공", "기타"]
+AIRLINES = [
+    # 국내
+    "대한항공", "아시아나항공", "제주항공", "진에어", "티웨이항공", "에어부산", "에어서울",
+    "이스타항공", "에어프레미아", "에어로케이항공",
+    # 일본
+    "일본항공(JAL)", "전일본공수(ANA)", "피치항공", "젯스타재팬", "스카이마크",
+    # 동남아 / 중화권
+    "베트남항공", "비엣젯항공", "뱀부항공", "타이항공", "타이 에어아시아", "에어아시아",
+    "싱가포르항공", "스쿠트", "필리핀항공", "세부퍼시픽", "캐세이퍼시픽", "중화항공", "에바항공",
+    # 미주 / 유럽 / 중동
+    "델타항공", "유나이티드항공", "아메리칸항공", "하와이안항공", "에어캐나다",
+    "루프트한자", "에어프랑스", "영국항공", "KLM", "터키항공", "에미레이트항공", "카타르항공",
+    "기타",
+]
 MODE_OPTIONS = ["📂 기존 여행 선택하기", "➕ 새 여행 만들기"]
 
 # 이름: (야후 파이낸스 티커, 표시 배수)
@@ -569,7 +582,8 @@ def render_dashboard(trip_name: str, trip: dict, trip_id: str):
 def render_flights(trip_name: str, trip: dict, trip_id: str):
     with st.form(f"flight_form_{trip_id}"):
         st.subheader("출국편 & 귀국편 입력")
-        dep_airline = st.selectbox("출국 항공사", AIRLINES, key=f"dep_a_{trip_id}")
+        dep_airline = st.selectbox("출국 항공사 (목록에서 글자를 입력해 검색할 수 있어요)", AIRLINES, key=f"dep_a_{trip_id}")
+        dep_custom = st.text_input("출국 항공사 직접 입력 (목록에 없을 때만)", key=f"dep_custom_{trip_id}")
         c1, c2 = st.columns(2)
         with c1:
             dep_t = st.time_input("출발 시간", value=time(7, 55), key=f"dep_t_{trip_id}")
@@ -577,6 +591,7 @@ def render_flights(trip_name: str, trip: dict, trip_id: str):
             arr_t = st.time_input("도착 시간", value=time(10, 30), key=f"arr_t_{trip_id}")
 
         ret_airline = st.selectbox("귀국 항공사", AIRLINES, key=f"ret_a_{trip_id}")
+        ret_custom = st.text_input("귀국 항공사 직접 입력 (목록에 없을 때만)", key=f"ret_custom_{trip_id}")
         c3, c4 = st.columns(2)
         with c3:
             ret_dep_t = st.time_input("귀국 출발 시간", value=time(14, 15), key=f"ret_dep_t_{trip_id}")
@@ -585,16 +600,19 @@ def render_flights(trip_name: str, trip: dict, trip_id: str):
 
         price = st.number_input("총합 가격 (원)", min_value=0, step=1000, value=300000, key=f"f_price_{trip_id}")
         is_discount = st.checkbox("🏷️ 특가 / 할인가 적용 항공권인가요?", key=f"f_disc_{trip_id}")
+        f_link = st.text_input("항공권 예매 링크 (URL)", key=f"f_link_{trip_id}",
+                               placeholder="https://www.skyscanner.co.kr 또는 항공사 예매 페이지 주소")
 
         if st.form_submit_button("➕ 항공권 추가"):
             append_item(trip_name, "flights", {
                 "id": new_id(),
-                "출국 항공사": dep_airline,
+                "출국 항공사": dep_custom.strip() or dep_airline,
                 "출국 시간": f"{dep_t:%H:%M} -> {arr_t:%H:%M}",
-                "귀국 항공사": ret_airline,
+                "귀국 항공사": ret_custom.strip() or ret_airline,
                 "귀국 시간": f"{ret_dep_t:%H:%M} -> {ret_arr_t:%H:%M}",
                 "총합 가격(원)": price,
                 "할인여부": "할인가" if is_discount else "정가",
+                "링크": normalize_url(f_link),
                 "상태": "후보",
             })
             st.rerun()
@@ -610,7 +628,7 @@ def render_flights(trip_name: str, trip: dict, trip_id: str):
         tag = "🔥 [할인가]" if f.get("할인여부") == "할인가" else "🏷️ [정가]"
         text = f"{tag} {f['출국 항공사']} ({f['출국 시간']}) ↔ {f['귀국 항공사']} ({f['귀국 시간']}) | **{price_fmt}**"
 
-        col_info, col_chk, col_del = st.columns([5, 1.2, 0.6])
+        col_info, col_chk, col_link, col_edit, col_del = st.columns([4.2, 1.2, 1.0, 0.6, 0.6])
         with col_info:
             if f.get("상태") == "구매완료":
                 st.success(f"✅ **[구매 완료]** {text}")
@@ -622,6 +640,18 @@ def render_flights(trip_name: str, trip: dict, trip_id: str):
             key = f"f_status_{f['id']}"
             st.checkbox("구매완료", value=(f.get("상태") == "구매완료"), key=key,
                         on_change=cb_toggle, args=(trip_name, "flights", f["id"], "상태", key, "구매완료", "후보"))
+        with col_link:
+            if f.get("링크"):
+                st.link_button("🔗 예매", normalize_url(f["링크"]))
+            else:
+                st.caption("링크없음")
+        with col_edit:
+            with st.popover("✏️"):
+                with st.form(f"f_link_form_{f['id']}"):
+                    new_link = st.text_input("예매 링크 (URL)", value=f.get("링크", ""))
+                    if st.form_submit_button("💾 저장"):
+                        edit_item(trip_name, "flights", f["id"], {"링크": normalize_url(new_link)})
+                        st.rerun()
         with col_del:
             st.button("🗑️", key=f"f_del_{f['id']}", on_click=cb_delete, args=(trip_name, "flights", f["id"]))
     reset_button(trip_name, trip_id, "flights", "항공권")
