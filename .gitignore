@@ -1,0 +1,6 @@
+travel_data.json
+travel_data.json.bak
+*.tmp
+photos/
+__pycache__/
+.streamlit/secrets.toml
