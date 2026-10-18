@@ -159,19 +159,19 @@ else:
     st.caption(f"📅 여행 일정: {current_trip['info']['period']}")
     
     # ------------------------------------------
-    # 지도 검색 쿼리 수집 (선택한 항목만 엄격 반영)
+    # 지도 검색 쿼리 수집 (체크된 항목만 엄격 반영)
     # ------------------------------------------
     city_query = current_trip['info'].get('city', 'Seoul')
     map_queries = []
     
-    # 1. 예약 완료된 숙소만 지도 대상 수집
-    booked_hotels = [h for h in current_trip["hotels"] if h.get("상태") == "예약완료"]
-    for h in booked_hotels:
-        q = h.get("위치").strip() if h.get("위치") else h.get("숙소명").strip()
-        if q:
-            map_queries.append(f"{city_query} {q}")
+    # 1. 숙소 중 '지도에 표시' 체크된 항목만 수집
+    for h in current_trip["hotels"]:
+        if h.get("show_on_map", False):
+            q = h.get("위치").strip() if h.get("위치") else h.get("숙소명").strip()
+            if q:
+                map_queries.append(f"{city_query} {q}")
 
-    # 2. '지도에 표시' 체크된 장소만 수집 (주소가 있으면 주소를 정확하게 사용)
+    # 2. 장소 중 '지도에 표시' 체크된 항목만 수집
     for spot in current_trip["spots"]:
         if spot.get("show_on_map", False):
             spot_q = spot.get("주소").strip() if spot.get("주소") else spot.get("장소명").strip()
@@ -211,17 +211,16 @@ else:
     with col_dash_right:
         st.subheader("🗺️ 선택된 장소 지도")
         if map_queries:
-            # 선택된 키워드만 엄격히 바인딩
             combined_query = " OR ".join([f'"{q}"' for q in map_queries])
             encoded_query = urllib.parse.quote(combined_query)
             map_url = f"https://maps.google.com/maps?q={encoded_query}&t=&z=13&ie=UTF8&iwloc=&output=embed"
             components.iframe(map_url, width=450, height=420)
-            st.caption(f"📍 현재 지도 표시 중인 장소: {len(map_queries)}개")
+            st.caption(f"📍 현재 지도 표시 중인 항목: {len(map_queries)}개")
         else:
             default_query = urllib.parse.quote(city_query)
             map_url = f"https://maps.google.com/maps?q={default_query}&t=&z=12&ie=UTF8&iwloc=&output=embed"
             components.iframe(map_url, width=450, height=420)
-            st.caption("💡 장소 목록에서 '지도에 표시'를 체크하거나 숙소 예약 완료 상태를 변경해 보세요!")
+            st.caption("💡 숙소나 장소 목록에서 '지도 표시'를 체크해 보세요!")
 
     st.markdown("---")
 
@@ -324,7 +323,8 @@ else:
                         "할인여부": "할인가" if is_h_discount else "정가",
                         "링크": h_link,
                         "메모": h_note,
-                        "상태": "후보"
+                        "상태": "후보",
+                        "show_on_map": False
                     })
                     save_data(travels)
                     st.success("숙소가 추가되었습니다!")
@@ -345,7 +345,7 @@ else:
                     url = hotel.get("링크", "").strip()
                     h_discount_tag = "🔥 [할인가]" if hotel.get("할인여부") == "할인가" else "🏷️ [정가]"
 
-                    c_text, c_actions = st.columns([4, 2])
+                    c_text, c_actions = st.columns([3, 3])
                     with c_text:
                         if hotel.get("상태") == "예약완료":
                             st.success(f"✅ **[예약 완료]** 🏢 **{hotel['숙소명']}** ({hotel['위치']}) | {h_discount_tag} 1박: {h_price_fmt}\n\n📝 메모: {hotel['메모']}")
@@ -355,22 +355,28 @@ else:
                             st.write(f"🏢 **{hotel['숙소명']}** ({hotel['위치']}) | {h_discount_tag} 1박: {h_price_fmt} | 📝 {hotel['메모']}")
                     
                     with c_actions:
-                        sub_col1, sub_col2, sub_col3 = st.columns([1.2, 1, 0.8])
-                        with sub_col1:
+                        col_sub1, col_sub2, col_sub3, col_sub4 = st.columns([1, 1, 1, 0.8])
+                        with col_sub1:
                             is_h_booked = st.checkbox("예약완료", value=(hotel.get("상태") == "예약완료"), key=f"h_status_{selected_travel}_{idx}")
                             new_h_status = "예약완료" if is_h_booked else "후보"
                             if new_h_status != hotel.get("상태"):
                                 current_trip["hotels"][idx]["상태"] = new_h_status
                                 save_data(travels)
                                 st.rerun()
-                        with sub_col2:
+                        with col_sub2:
+                            show_h_map = st.checkbox("지도 표시", value=hotel.get("show_on_map", False), key=f"hotel_map_chk_{selected_travel}_{idx}")
+                            if show_h_map != hotel.get("show_on_map", False):
+                                current_trip["hotels"][idx]["show_on_map"] = show_h_map
+                                save_data(travels)
+                                st.rerun()
+                        with col_sub3:
                             if url:
                                 if not (url.startswith("http://") or url.startswith("https://")):
                                     url = "https://" + url
                                 st.link_button("🔗 이동", url)
                             else:
                                 st.caption("링크없음")
-                        with sub_col3:
+                        with col_sub4:
                             if st.button("🗑️", key=f"h_del_btn_{selected_travel}_{idx}"):
                                 delete_idx = idx
 
@@ -389,7 +395,9 @@ else:
                                 current_trip["hotels"][idx] = {
                                     "숙소명": e_name, "위치": e_loc, "1박 가격(원)": e_price,
                                     "할인여부": "할인가" if e_is_discount else "정가",
-                                    "링크": e_link, "메모": e_note, "상태": hotel.get("상태", "후보")
+                                    "링크": e_link, "메모": e_note,
+                                    "상태": hotel.get("상태", "후보"),
+                                    "show_on_map": hotel.get("show_on_map", False)
                                 }
                                 save_data(travels)
                                 st.success("수정되었습니다!")
@@ -519,7 +527,6 @@ else:
             st.markdown("---")
             st.markdown("### 📌 일자별 상세 동선 및 지도")
             
-            # 동일한 날짜끼리 일정 묶기 (Grouping)
             grouped_schedules = {}
             for sch in current_trip["schedule"]:
                 d = sch.get("날짜", "미분류 날짜")
@@ -559,8 +566,12 @@ else:
                     for p in sch_data["장소목록"]:
                         clean_name = p.split(" ", 1)[-1]
                         matched_spot = next((s for s in current_trip["spots"] if s.get("장소명") == clean_name), None)
+                        matched_hotel = next((h for h in current_trip["hotels"] if h.get("숙소명") == clean_name), None)
+                        
                         if matched_spot and matched_spot.get("주소"):
                             route_queries.append(f"{city_query} {matched_spot.get('주소')}")
+                        elif matched_hotel and matched_hotel.get("위치"):
+                            route_queries.append(f"{city_query} {matched_hotel.get('위치')}")
                         else:
                             route_queries.append(f"{city_query} {clean_name}")
 
