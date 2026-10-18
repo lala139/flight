@@ -159,22 +159,24 @@ else:
     st.caption(f"📅 여행 일정: {current_trip['info']['period']}")
     
     # ------------------------------------------
-    # 지도 검색 쿼리 수집 (주소 기준 우선 반영)
+    # 지도 검색 쿼리 수집 (선택한 항목만 엄격 반영)
     # ------------------------------------------
+    city_query = current_trip['info'].get('city', 'Seoul')
     map_queries = []
     
-    # 1. 숙소 지도 수집
+    # 1. 예약 완료된 숙소만 지도 대상 수집
     booked_hotels = [h for h in current_trip["hotels"] if h.get("상태") == "예약완료"]
-    target_hotels = booked_hotels if booked_hotels else current_trip["hotels"]
-    for h in target_hotels:
-        q = h.get("위치") or h.get("숙소명")
-        if q: map_queries.append(q)
+    for h in booked_hotels:
+        q = h.get("위치").strip() if h.get("위치") else h.get("숙소명").strip()
+        if q:
+            map_queries.append(f"{city_query} {q}")
 
-    # 2. 장소/맛집 중 '지도에 표시' 체크된 항목 수집 (주소가 있으면 주소만 사용)
+    # 2. '지도에 표시' 체크된 장소만 수집 (주소가 있으면 주소를 정확하게 사용)
     for spot in current_trip["spots"]:
         if spot.get("show_on_map", False):
             spot_q = spot.get("주소").strip() if spot.get("주소") else spot.get("장소명").strip()
-            if spot_q: map_queries.append(spot_q)
+            if spot_q:
+                map_queries.append(f"{city_query} {spot_q}")
 
     # ==========================================
     # [상시 고정 대시보드 및 전체 지도 영역]
@@ -183,7 +185,6 @@ else:
     col_dash_left, col_dash_right = st.columns([1, 1])
     
     with col_dash_left:
-        city_query = current_trip['info'].get('city', 'Seoul')
         weather_info = get_weather(city_query)
         st.metric(label=f"🌤️ {city_query} 실시간 날씨", value=weather_info)
         
@@ -208,23 +209,24 @@ else:
                     st.rerun()
     
     with col_dash_right:
-        st.subheader("🗺️ 전체 관심 장소 지도")
+        st.subheader("🗺️ 선택된 장소 지도")
         if map_queries:
-            combined_query = " OR ".join(map_queries)
+            # 선택된 키워드만 엄격히 바인딩
+            combined_query = " OR ".join([f'"{q}"' for q in map_queries])
             encoded_query = urllib.parse.quote(combined_query)
             map_url = f"https://maps.google.com/maps?q={encoded_query}&t=&z=13&ie=UTF8&iwloc=&output=embed"
             components.iframe(map_url, width=450, height=420)
-            st.caption(f"📍 지도 반영 주소/장소 개수: {len(map_queries)}개")
+            st.caption(f"📍 현재 지도 표시 중인 장소: {len(map_queries)}개")
         else:
             default_query = urllib.parse.quote(city_query)
             map_url = f"https://maps.google.com/maps?q={default_query}&t=&z=12&ie=UTF8&iwloc=&output=embed"
             components.iframe(map_url, width=450, height=420)
-            st.caption("💡 장소 목록에서 '지도에 표시'를 체크해 보세요!")
+            st.caption("💡 장소 목록에서 '지도에 표시'를 체크하거나 숙소 예약 완료 상태를 변경해 보세요!")
 
     st.markdown("---")
 
     # ==========================================
-    # 탭 구조 (나머지 기능들)
+    # 탭 구조
     # ==========================================
     tab_flight_hotel, tab_spot_sched, tab_expense, tab_etc = st.tabs([
         "✈️ 항공권 & 숙소", 
@@ -516,37 +518,56 @@ else:
         if current_trip["schedule"]:
             st.markdown("---")
             st.markdown("### 📌 일자별 상세 동선 및 지도")
-            for sch_idx, sch in enumerate(current_trip["schedule"]):
-                st.markdown(f"#### 🗓️ {sch.get('날짜', f'{sch_idx+1}일차')}")
+            
+            # 동일한 날짜끼리 일정 묶기 (Grouping)
+            grouped_schedules = {}
+            for sch in current_trip["schedule"]:
+                d = sch.get("날짜", "미분류 날짜")
+                if d not in grouped_schedules:
+                    grouped_schedules[d] = {"장소목록": [], "메모목록": []}
                 if sch.get("장소목록"):
+                    for p in sch["장소목록"]:
+                        if p not in grouped_schedules[d]["장소목록"]:
+                            grouped_schedules[d]["장소목록"].append(p)
+                if sch.get("메모"):
+                    grouped_schedules[d]["메모목록"].append(sch["메모"])
+
+            for sch_idx, (date_str, sch_data) in enumerate(sorted(grouped_schedules.items())):
+                st.markdown(f"#### 🗓️ {date_str}")
+                
+                if sch_data["장소목록"]:
                     updated_order = st.multiselect(
-                        f"[{sch.get('날짜')}] 방문 순서 조정",
-                        options=sch["장소목록"],
-                        default=sch["장소목록"],
+                        f"[{date_str}] 방문 순서 조정",
+                        options=sch_data["장소목록"],
+                        default=sch_data["장소목록"],
                         key=f"order_select_{selected_travel}_{sch_idx}"
                     )
-                    if updated_order != sch["장소목록"]:
-                        current_trip["schedule"][sch_idx]["장소목록"] = updated_order
+                    if updated_order != sch_data["장소목록"]:
+                        for s in current_trip["schedule"]:
+                            if s.get("날짜") == date_str:
+                                s["장소목록"] = updated_order
+                                break
                         save_data(travels)
                         st.rerun()
 
-                if sch.get("메모"):
-                    st.write(f"📝 메모: {sch['메모']}")
+                if sch_data["메모목록"]:
+                    for m in sch_data["메모목록"]:
+                        st.write(f"📝 메모: {m}")
                 
-                if sch.get("장소목록"):
+                if sch_data["장소목록"]:
                     route_queries = []
-                    for p in sch["장소목록"]:
+                    for p in sch_data["장소목록"]:
                         clean_name = p.split(" ", 1)[-1]
                         matched_spot = next((s for s in current_trip["spots"] if s.get("장소명") == clean_name), None)
                         if matched_spot and matched_spot.get("주소"):
-                            route_queries.append(matched_spot.get("주소"))
+                            route_queries.append(f"{city_query} {matched_spot.get('주소')}")
                         else:
-                            route_queries.append(clean_name)
+                            route_queries.append(f"{city_query} {clean_name}")
 
-                    route_combined = " -> ".join(route_queries)
+                    route_combined = " -> ".join([f'"{rq}"' for rq in route_queries])
                     encoded_route = urllib.parse.quote(route_combined)
                     route_map_url = f"https://maps.google.com/maps?q={encoded_route}&t=&z=13&ie=UTF8&iwloc=&output=embed"
-                    st.caption(f"🗺️ 이동 동선: {' ➔ '.join(sch['장소목록'])}")
+                    st.caption(f"🗺️ 이동 동선: {' ➔ '.join(sch_data['장소목록'])}")
                     components.iframe(route_map_url, width=600, height=280)
                 st.write("---")
 
