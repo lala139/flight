@@ -395,7 +395,7 @@ def get_weather(city_name: str) -> str:
     try:
         res = requests.get(
             f"https://wttr.in/{urllib.parse.quote(city_name)}",
-            params={"format": "%C+%t"},
+            params={"format": "%C %t", "m": "", "lang": "ko"},
             timeout=3,
         )
         if res.status_code == 200:
@@ -522,7 +522,7 @@ def render_dashboard(trip_name: str, trip: dict, trip_id: str):
 
         st.markdown("---")
         st.write("🚨 **현지 긴급 연락처**")
-        st.info(trip.get("embassy", ""))
+        st.info(trip.get("embassy", "").replace("\n", "  \n"))
         with st.popover("✏️ 연락처 정보 수정"):
             with st.form(f"embassy_form_{trip_id}"):
                 new_embassy = st.text_area("긴급 연락처 메모", value=trip.get("embassy", ""))
