@@ -13,7 +13,18 @@ DB_FILE = "travel_data.json"
 def load_data():
     if os.path.exists(DB_FILE):
         with open(DB_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            # 기존 데이터와 새 키 호환성 자동 보정
+            for trip in data.values():
+                for h in trip.get("hotels", []):
+                    if "가격" not in h and "1박 가격(원)" in h:
+                        h["가격"] = h["1박 가격(원)"]
+                    h.setdefault("가격", 100000)
+                for f_item in trip.get("flights", []):
+                    if "가격" not in f_item and "총합 가격(원)" in f_item:
+                        f_item["가격"] = f_item["총합 가격(원)"]
+                    f_item.setdefault("가격", 300000)
+            return data
     return {}
 
 def save_data(data):
@@ -160,7 +171,8 @@ else:
                 for idx, f in enumerate(trip["flights"]):
                     cols = st.columns([4, 1])
                     with cols[0]:
-                        st.write(f"▫️ {f['출국']} ↔ {f['귀국']} | {f['가격']:,}원 ({f['상태']})")
+                        f_price = f.get('가격', f.get('총합 가격(원)', 0))
+                        st.write(f"▫️ {f['출국']} ↔ {f['귀국']} | {f_price:,}원 ({f.get('상태', '후보')})")
                     with cols[1]:
                         if st.button("삭제", key=f"del_f_{idx}"):
                             trip["flights"].pop(idx)
@@ -185,7 +197,8 @@ else:
                 for idx, h in enumerate(trip["hotels"]):
                     cols = st.columns([4, 1])
                     with cols[0]:
-                        st.write(f"🏢 {h['숙소명']} ({h['위치']}) - {h['가격']:,}원")
+                        h_price = h.get('가격', h.get('1박 가격(원)', 0))
+                        st.write(f"🏢 {h['숙소명']} ({h['위치']}) - {h_price:,}원")
                     with cols[1]:
                         if st.button("삭제", key=f"del_h_{idx}"):
                             trip["hotels"].pop(idx)
