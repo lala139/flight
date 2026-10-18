@@ -39,10 +39,9 @@ def load_data():
                     s_item.setdefault("이름", "장소")
                     s_item.setdefault("분류", "기타")
 
-                # 4. 일정 데이터 보정 (KeyError 원인 해결)
+                # 4. 일정 데이터 보정
                 for sc_item in trip.get("schedule", []):
                     if "내용" not in sc_item:
-                        # 예전 데이터에 '장소목록'이나 '메모'가 있다면 내용으로 합쳐서 복구
                         memo_parts = []
                         if sc_item.get("장소목록"):
                             memo_parts.append(f"장소: {', '.join(sc_item['장소목록'])}")
@@ -176,8 +175,8 @@ else:
                     st.rerun()
     st.markdown("---")
 
-    # 탭 메뉴 분리
-    tab_f, tab_s, tab_e, tab_c, tab_v, tab_p = st.tabs([
+    # 탭 메뉴 분리 (변수명 일치화)
+    tab_f, tab_s, tab_e, tab_c, tab_video, tab_photo = st.tabs([
         "✈️ 항공권 & 숙소", "📍 장소 및 일정", "💰 비용", "🎒 준비물", "📺 영상", "📸 사진첩"
     ])
 
