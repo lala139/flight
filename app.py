@@ -4,6 +4,8 @@ import json
 import os
 import requests
 import yfinance as yf
+import urllib.parse
+import streamlit.components.v1 as components
 
 # --- 데이터 저장 파일 (JSON) ---
 DB_FILE = "travel_data.json"
@@ -103,19 +105,59 @@ else:
     st.title(f"📍 {current_trip['info']['name']}")
     st.caption(f"📅 여행 일정: {current_trip['info']['period']}")
     
-    # --- 실시간 대시보드 (날씨 & 환율) ---
-    col_w, col_e = st.columns(2)
-    with col_w:
+    # ------------------------------------------
+    # 지도 표시용 검색 쿼리 수집 로직
+    # ------------------------------------------
+    map_queries = []
+    
+    # 1. 숙소 지도 수집 (예약 완료가 하나라도 있으면 그 숙소만, 없으면 후보지 전체)
+    booked_hotels = [h for h in current_trip["hotels"] if h.get("상태") == "예약완료"]
+    if booked_hotels:
+        for bh in booked_hotels:
+            q = bh.get("위치") or bh.get("숙소명")
+            if q: map_queries.append(f"🏢 {bh['숙소명']} ({q})")
+    else:
+        for h in current_trip["hotels"]:
+            q = h.get("위치") or h.get("숙소명")
+            if q: map_queries.append(f"🏢 {h['숙소명']} ({q})")
+
+    # 2. 장소/맛집 중 '지도에 표시' 체크된 항목 수집
+    category_emojis = {"놀거리/관광지": "🎡", "맛집/카페": "🍴", "쇼핑": "🛍️", "기타": "📌"}
+    for spot in current_trip["spots"]:
+        if spot.get("show_on_map", False):
+            cat_emoji = category_emojis.get(spot.get("분류"), "📌")
+            q = spot.get("장소명")
+            if q: map_queries.append(f"{cat_emoji} {q}")
+
+    # --- 대시보드: 좌측(날씨 & 환율), 우측(정사각형 구글 지도) ---
+    col_dash_left, col_dash_right = st.columns([1, 1])
+    
+    with col_dash_left:
         city_query = current_trip['info'].get('city', 'Seoul')
         weather_info = get_weather(city_query)
         st.metric(label=f"🌤️ {city_query} 실시간 날씨", value=weather_info)
-    
-    with col_e:
-        rates = get_exchange_rates()
-        rate_str = " | ".join([f"{k}: {v}원" for k, v in rates.items()])
-        st.write("🔱 **실시간 주요 환율**")
-        st.info(rate_str)
         
+        st.markdown("---")
+        rates = get_exchange_rates()
+        st.write("🔱 **실시간 주요 환율**")
+        for k, v in rates.items():
+            st.caption(f"• **{k}**: {v}원")
+    
+    with col_dash_right:
+        st.subheader("🗺️ 실시간 위치 지도")
+        if map_queries:
+            # 여러 위치를 구글 지도 검색 쿼리로 결합
+            combined_query = " OR ".join(map_queries)
+            encoded_query = urllib.parse.quote(combined_query)
+            map_url = f"https://maps.google.com/maps?q={encoded_query}&t=&z=13&ie=UTF8&iwloc=&output=embed"
+            components.iframe(map_url, width=400, height=400)
+            st.caption(f"📍 현재 지도 표시 항목: {', '.join(map_queries)}")
+        else:
+            default_query = urllib.parse.quote(city_query)
+            map_url = f"https://maps.google.com/maps?q={default_query}&t=&z=12&ie=UTF8&iwloc=&output=embed"
+            components.iframe(map_url, width=400, height=400)
+            st.caption("💡 지도에 띄울 숙소나 관광지/맛집 항목을 목록에서 체크해 보세요!")
+
     st.markdown("---")
 
     # ------------------------------------------
@@ -190,11 +232,11 @@ else:
                 save_data(travels)
                 st.rerun()
 
-    # [2] 숙소 후보 (정돈된 가독성 중심 레이아웃)
-    with st.expander("🏨 숙소 후보"):
+    # [2] 🏢 숙소 후보 (건물 이모지 & 지도 자동 연동)
+    with st.expander("🏢 숙소 후보"):
         with st.form("hotel_form"):
             h_name = st.text_input("숙소 이름")
-            h_loc = st.text_input("위치 / 지역")
+            h_loc = st.text_input("위치 / 주소 (지도 표시용)")
             h_price = st.number_input("1박 가격 (원)", min_value=0, step=5000, value=100000)
             is_h_discount = st.checkbox("🏷️ 특가 / 할인가 적용 숙소인가요?")
             h_link = st.text_input("숙소 링크 (URL)", placeholder="https://www.agoda.com 또는 https://www.airbnb.co.kr...")
@@ -231,21 +273,19 @@ else:
                 url = hotel.get("링크", "").strip()
                 h_discount_tag = "🔥 [할인가]" if hotel.get("할인여부") == "할인가" else "🏷️ [정가]"
 
-                # UI 가독성 정돈: 주요 정보 영역 / 액션 버튼 영역을 2:1 크기로 분리
                 c_text, c_actions = st.columns([4, 2])
                 
                 with c_text:
                     if hotel.get("상태") == "예약완료":
-                        st.success(f"✅ **[예약 완료]** {h_discount_tag} **{hotel['숙소명']}** ({hotel['위치']}) | 1박: {h_price_fmt}\n\n📝 메모: {hotel['메모']}")
+                        st.success(f"✅ **[예약 완료]** 🏢 **{hotel['숙소명']}** ({hotel['위치']}) | {h_discount_tag} 1박: {h_price_fmt}\n\n📝 메모: {hotel['메모']}")
                     elif is_cheapest_h:
-                        st.info(f"💡 **[추천 가성비]** {h_discount_tag} **{hotel['숙소명']}** ({hotel['위치']}) | 1박: {h_price_fmt}\n\n📝 메모: {hotel['메모']}")
+                        st.info(f"💡 **[추천 가성비]** 🏢 **{hotel['숙소명']}** ({hotel['위치']}) | {h_discount_tag} 1박: {h_price_fmt}\n\n📝 메모: {hotel['메모']}")
                     else:
-                        st.write(f"▫️ **{hotel['숙소명']}** ({hotel['위치']}) | {h_discount_tag} 1박: {h_price_fmt} | 📝 {hotel['메모']}")
+                        st.write(f"🏢 **{hotel['숙소명']}** ({hotel['위치']}) | {h_discount_tag} 1박: {h_price_fmt} | 📝 {hotel['메모']}")
                 
                 with c_actions:
                     sub_col1, sub_col2, sub_col3 = st.columns([1.2, 1, 0.8])
                     
-                    # 1. 예약 상태
                     with sub_col1:
                         is_h_booked = st.checkbox("예약완료", value=(hotel.get("상태") == "예약완료"), key=f"h_status_{selected_travel}_{idx}")
                         new_h_status = "예약완료" if is_h_booked else "후보"
@@ -254,7 +294,6 @@ else:
                             save_data(travels)
                             st.rerun()
 
-                    # 2. 바로가기
                     with sub_col2:
                         if url:
                             if not (url.startswith("http://") or url.startswith("https://")):
@@ -263,20 +302,17 @@ else:
                         else:
                             st.caption("링크없음")
 
-                    # 3. 삭제
                     with sub_col3:
                         if st.button("🗑️", key=f"h_del_btn_{selected_travel}_{idx}"):
                             delete_idx = idx
 
-                    # 4. 수정 옵션 (아래쪽에 깔끔하게 인라인 배치)
                     edit_toggle = st.checkbox("✏️ 정보 수정", key=f"h_edit_toggle_{selected_travel}_{idx}")
 
-                # 수정 전용 폼
                 if edit_toggle:
                     with st.form(key=f"h_edit_form_{selected_travel}_{idx}"):
-                        st.markdown(f"⚙️ **'{hotel['숙소명']}' 내용 수정**")
+                        st.markdown(f"⚙️ **'🏢 {hotel['숙소명']}' 내용 수정**")
                         e_name = st.text_input("숙소 이름", value=hotel.get("숙소명", ""))
-                        e_loc = st.text_input("위치 / 지역", value=hotel.get("위치", ""))
+                        e_loc = st.text_input("위치 / 주소", value=hotel.get("위치", ""))
                         e_price = st.number_input("1박 가격 (원)", min_value=0, step=5000, value=int(hotel.get("1박 가격(원)", 100000)))
                         e_is_discount = st.checkbox("🏷️ 특가 / 할인가 적용", value=(hotel.get("할인여부") == "할인가"))
                         e_link = st.text_input("숙소 링크 (URL)", value=hotel.get("링크", ""))
@@ -308,19 +344,44 @@ else:
                 save_data(travels)
                 st.rerun()
 
-    # [3] 여행지 & 맛집
+    # [3] 📍 여행지 및 맛집 (이모지 분류 & 지도 토글 버튼)
     with st.expander("📍 여행지 및 맛집"):
         with st.form("spot_form"):
-            s_name = st.text_input("장소 이름")
-            s_cat = st.selectbox("분류", ["관광지", "맛집/카페", "쇼핑", "기타"])
+            s_name = st.text_input("장소 이름 (예: 센소지, 도쿄 타워)")
+            s_cat = st.selectbox("분류", ["놀거리/관광지", "맛집/카페", "쇼핑", "기타"])
             s_note = st.text_area("추천 이유 및 메모")
             if st.form_submit_button("➕ 장소 추가"):
-                current_trip["spots"].append({"장소명": s_name, "분류": s_cat, "메모": s_note})
+                current_trip["spots"].append({
+                    "장소명": s_name, 
+                    "분류": s_cat, 
+                    "메모": s_note,
+                    "show_on_map": False
+                })
                 save_data(travels)
                 st.success("장소가 추가되었습니다!")
                 st.rerun()
+                
         if current_trip["spots"]:
-            st.dataframe(pd.DataFrame(current_trip["spots"]), use_container_width=True)
+            st.subheader("📋 등록된 장소 목록")
+            for idx, spot in enumerate(current_trip["spots"]):
+                cat_name = spot.get("분류", "기타")
+                emoji = category_emojis.get(cat_name, "📌")
+                
+                col_s_info, col_s_map = st.columns([4, 1.2])
+                with col_s_info:
+                    st.write(f"{emoji} **[{cat_name}] {spot['장소명']}** — 📝 {spot['메모']}")
+                
+                with col_s_map:
+                    show_map = st.checkbox(
+                        "🗺️ 지도에 표시", 
+                        value=spot.get("show_on_map", False), 
+                        key=f"spot_map_chk_{selected_travel}_{idx}"
+                    )
+                    if show_map != spot.get("show_on_map", False):
+                        current_trip["spots"][idx]["show_on_map"] = show_map
+                        save_data(travels)
+                        st.rerun()
+
             if st.button("🗑️ 여행지 전체 초기화"):
                 current_trip["spots"] = []
                 save_data(travels)
